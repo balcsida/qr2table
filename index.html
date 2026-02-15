@@ -643,53 +643,50 @@
   // Lossy compression: iteratively flip isolated data modules to aid merging.
   // Enhanced with per-flip re-scoring so each flip updates the isolation
   // landscape for its neighbors, producing better cascading improvements.
-  function applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevelStr, budget) {
-    const protect = buildProtectionMask(moduleCount, pad, totalSize);
-    const ecRates = { L: 0.07, M: 0.15, Q: 0.25, H: 0.30 };
-    const ecPct = ecRates[ecLevelStr] || 0.07;
-
+  // Accepts rectangular grids and an external protection mask + EC percentage.
+  function applyLossyCompression(grid, pad, totalRows, totalCols, protect, ecPct, budget) {
     let dataModules = 0;
-    for (let r = pad; r < totalSize - pad; r++)
-      for (let c = pad; c < totalSize - pad; c++)
+    for (let r = pad; r < totalRows - pad; r++)
+      for (let c = pad; c < totalCols - pad; c++)
         if (!protect[r][c]) dataModules++;
 
     const maxFlips = Math.floor(dataModules * ecPct * 0.5 * budget);
     if (maxFlips === 0) return 0;
 
     // Prevent double-flips (flipping a module back wastes budget)
-    const wasFlipped = new Uint8Array(totalSize * totalSize);
+    const wasFlipped = new Uint8Array(totalRows * totalCols);
 
     // Score a module by isolation from its 8-connected neighborhood.
     // Cardinal diffs drive the threshold; diagonal diffs refine tie-breaking.
     function scoreAt(r, c) {
-      if (protect[r][c] || wasFlipped[r * totalSize + c]) return -1;
+      if (protect[r][c] || wasFlipped[r * totalCols + c]) return -1;
       const val = grid[r][c];
       let cardDiff = 0;
       if (r > 0 && grid[r - 1][c] !== val) cardDiff++;
-      if (r < totalSize - 1 && grid[r + 1][c] !== val) cardDiff++;
+      if (r < totalRows - 1 && grid[r + 1][c] !== val) cardDiff++;
       if (c > 0 && grid[r][c - 1] !== val) cardDiff++;
-      if (c < totalSize - 1 && grid[r][c + 1] !== val) cardDiff++;
+      if (c < totalCols - 1 && grid[r][c + 1] !== val) cardDiff++;
       if (cardDiff < 2) return -1;
       let diagDiff = 0;
       if (r > 0 && c > 0 && grid[r - 1][c - 1] !== val) diagDiff++;
-      if (r > 0 && c < totalSize - 1 && grid[r - 1][c + 1] !== val) diagDiff++;
-      if (r < totalSize - 1 && c > 0 && grid[r + 1][c - 1] !== val) diagDiff++;
-      if (r < totalSize - 1 && c < totalSize - 1 && grid[r + 1][c + 1] !== val) diagDiff++;
+      if (r > 0 && c < totalCols - 1 && grid[r - 1][c + 1] !== val) diagDiff++;
+      if (r < totalRows - 1 && c > 0 && grid[r + 1][c - 1] !== val) diagDiff++;
+      if (r < totalRows - 1 && c < totalCols - 1 && grid[r + 1][c + 1] !== val) diagDiff++;
       return cardDiff * 10 + diagDiff * 3;
     }
 
     // Build initial score grid
-    const scores = Array.from({ length: totalSize }, () => new Array(totalSize).fill(-1));
-    for (let r = pad; r < totalSize - pad; r++)
-      for (let c = pad; c < totalSize - pad; c++)
+    const scores = Array.from({ length: totalRows }, () => new Array(totalCols).fill(-1));
+    for (let r = pad; r < totalRows - pad; r++)
+      for (let c = pad; c < totalCols - pad; c++)
         scores[r][c] = scoreAt(r, c);
 
     let flippedCount = 0;
     while (flippedCount < maxFlips) {
       // Find the most isolated module
       let bestR = -1, bestC = -1, bestScore = -1;
-      for (let r = pad; r < totalSize - pad; r++)
-        for (let c = pad; c < totalSize - pad; c++)
+      for (let r = pad; r < totalRows - pad; r++)
+        for (let c = pad; c < totalCols - pad; c++)
           if (scores[r][c] > bestScore) {
             bestScore = scores[r][c];
             bestR = r;
@@ -699,14 +696,14 @@
 
       // Flip it
       grid[bestR][bestC] = !grid[bestR][bestC];
-      wasFlipped[bestR * totalSize + bestC] = 1;
+      wasFlipped[bestR * totalCols + bestC] = 1;
       flippedCount++;
 
       // Re-score the 3x3 neighborhood affected by the flip
       for (let dr = -1; dr <= 1; dr++)
         for (let dc = -1; dc <= 1; dc++) {
           const nr = bestR + dr, nc = bestC + dc;
-          if (nr >= pad && nr < totalSize - pad && nc >= pad && nc < totalSize - pad)
+          if (nr >= pad && nr < totalRows - pad && nc >= pad && nc < totalCols - pad)
             scores[nr][nc] = scoreAt(nr, nc);
         }
     }
