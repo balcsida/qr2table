@@ -506,13 +506,13 @@
 
 <script>
   const BARCODE_TYPES = {
-    qrcode:     { lib: 'qr',   type: '2d', hasEC: true,  hasLossy: true  },
-    azteccode:  { lib: 'bwip', type: '2d', hasEC: true,  hasLossy: false },
-    datamatrix: { lib: 'bwip', type: '2d', hasEC: false, hasLossy: false },
-    code128:    { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
-    code39:     { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
-    ean13:      { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
-    upca:       { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
+    qrcode:     { lib: 'qr',   type: '2d', hasEC: true,  hasLossy: true,  placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    azteccode:  { lib: 'bwip', type: '2d', hasEC: true,  hasLossy: false, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    datamatrix: { lib: 'bwip', type: '2d', hasEC: false, hasLossy: false, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    code128:    { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    code39:     { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false, placeholder: 'HELLO 2025',          defaultVal: 'HELLO 2025' },
+    ean13:      { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false, placeholder: '590123412345',        defaultVal: '590123412345' },
+    upca:       { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false, placeholder: '01234567890',         defaultVal: '01234567890' },
   };
 
   const barcodeTypeEl = document.getElementById('barcode-type');
@@ -1019,9 +1019,16 @@
   const lossyPanelEl = lossyEnabledEl.closest('.panel');
 
   function updateUIForBarcodeType() {
-    const cfg = BARCODE_TYPES[barcodeTypeEl.value];
+    const bcid = barcodeTypeEl.value;
+    const cfg = BARCODE_TYPES[bcid];
+    const prev = BARCODE_TYPES[updateUIForBarcodeType._prev || 'qrcode'];
     ecFieldEl.style.display = cfg.hasEC ? '' : 'none';
     lossyPanelEl.style.display = cfg.hasLossy ? '' : 'none';
+    inputEl.placeholder = cfg.placeholder;
+    if (!inputEl.value.trim() || inputEl.value.trim() === prev.defaultVal) {
+      inputEl.value = cfg.defaultVal;
+    }
+    updateUIForBarcodeType._prev = bcid;
     generate();
   }
 
