@@ -6,6 +6,10 @@ Generate email-safe QR codes as pure HTML tables with colspan/rowspan optimizati
 
 No images, no base64, no external dependencies in the output — just a `<table>` with inline styles that renders in every email client.
 
+## Demo
+
+https://github.com/user-attachments/assets/38682c00-f228-41e3-8eff-a9bd0bb6c2fa
+
 ## Why?
 
 Most email clients (Gmail, Outlook, Apple Mail, Yahoo) aggressively block or strip images. A QR code embedded as an `<img>` tag may never reach the recipient. HTML tables, on the other hand, are the backbone of email rendering and pass through even the most aggressive sanitizers.

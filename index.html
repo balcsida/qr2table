@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QR → Table</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -429,9 +430,9 @@
           <div class="field">
             <div class="range-row">
               <label for="lossy-budget">Aggressiveness</label>
-              <span class="range-val" id="lossy-budget-val">50%</span>
+              <span class="range-val" id="lossy-budget-val">20%</span>
             </div>
-            <input type="range" id="lossy-budget" min="5" max="100" value="50">
+            <input type="range" id="lossy-budget" min="5" max="100" value="20">
           </div>
           <div style="font-size:0.75rem;color:var(--text-dim);line-height:1.5;margin-top:0.5rem;">
             Flips isolated data modules to create larger mergeable regions. Finder patterns, alignment patterns, timing, format &amp; version info are fully protected. Higher EC levels give more headroom. Always verify with a scanner.
@@ -578,51 +579,202 @@
     return p;
   }
 
-  // Lossy compression: flip isolated data modules to aid merging
+  // Lossy compression: iteratively flip isolated data modules to aid merging.
+  // Enhanced with per-flip re-scoring so each flip updates the isolation
+  // landscape for its neighbors, producing better cascading improvements.
   function applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevelStr, budget) {
     const protect = buildProtectionMask(moduleCount, pad, totalSize);
-
-    // Score each unprotected module: how many of its 4 neighbors have a different color?
-    // A module with 4 differing neighbors is a lone island — prime flip target
-    const candidates = [];
-    for (let r = pad; r < totalSize - pad; r++) {
-      for (let c = pad; c < totalSize - pad; c++) {
-        if (protect[r][c]) continue;
-        const val = grid[r][c];
-        let diff = 0, total = 0;
-        if (r > 0)              { total++; if (grid[r-1][c] !== val) diff++; }
-        if (r < totalSize - 1)  { total++; if (grid[r+1][c] !== val) diff++; }
-        if (c > 0)              { total++; if (grid[r][c-1] !== val) diff++; }
-        if (c < totalSize - 1)  { total++; if (grid[r][c+1] !== val) diff++; }
-        // Only consider modules where flipping would help merging
-        if (diff >= 2) {
-          candidates.push({ r, c, score: diff * 10 + total });
-        }
-      }
-    }
-
-    // Sort: most isolated modules first
-    candidates.sort((a, b) => b.score - a.score);
-
-    // Calculate flip budget from EC capacity
     const ecRates = { L: 0.07, M: 0.15, Q: 0.25, H: 0.30 };
     const ecPct = ecRates[ecLevelStr] || 0.07;
 
-    // Count unprotected (data) modules
     let dataModules = 0;
     for (let r = pad; r < totalSize - pad; r++)
       for (let c = pad; c < totalSize - pad; c++)
         if (!protect[r][c]) dataModules++;
 
-    // Use 50% of theoretical EC capacity as safety margin, scaled by aggressiveness
     const maxFlips = Math.floor(dataModules * ecPct * 0.5 * budget);
-    const toFlip = Math.min(candidates.length, maxFlips);
+    if (maxFlips === 0) return 0;
 
-    for (let i = 0; i < toFlip; i++) {
-      grid[candidates[i].r][candidates[i].c] = !grid[candidates[i].r][candidates[i].c];
+    // Prevent double-flips (flipping a module back wastes budget)
+    const wasFlipped = new Uint8Array(totalSize * totalSize);
+
+    // Score a module by isolation from its 8-connected neighborhood.
+    // Cardinal diffs drive the threshold; diagonal diffs refine tie-breaking.
+    function scoreAt(r, c) {
+      if (protect[r][c] || wasFlipped[r * totalSize + c]) return -1;
+      const val = grid[r][c];
+      let cardDiff = 0;
+      if (r > 0 && grid[r - 1][c] !== val) cardDiff++;
+      if (r < totalSize - 1 && grid[r + 1][c] !== val) cardDiff++;
+      if (c > 0 && grid[r][c - 1] !== val) cardDiff++;
+      if (c < totalSize - 1 && grid[r][c + 1] !== val) cardDiff++;
+      if (cardDiff < 2) return -1;
+      let diagDiff = 0;
+      if (r > 0 && c > 0 && grid[r - 1][c - 1] !== val) diagDiff++;
+      if (r > 0 && c < totalSize - 1 && grid[r - 1][c + 1] !== val) diagDiff++;
+      if (r < totalSize - 1 && c > 0 && grid[r + 1][c - 1] !== val) diagDiff++;
+      if (r < totalSize - 1 && c < totalSize - 1 && grid[r + 1][c + 1] !== val) diagDiff++;
+      return cardDiff * 10 + diagDiff * 3;
     }
 
-    return toFlip;
+    // Build initial score grid
+    const scores = Array.from({ length: totalSize }, () => new Array(totalSize).fill(-1));
+    for (let r = pad; r < totalSize - pad; r++)
+      for (let c = pad; c < totalSize - pad; c++)
+        scores[r][c] = scoreAt(r, c);
+
+    let flippedCount = 0;
+    while (flippedCount < maxFlips) {
+      // Find the most isolated module
+      let bestR = -1, bestC = -1, bestScore = -1;
+      for (let r = pad; r < totalSize - pad; r++)
+        for (let c = pad; c < totalSize - pad; c++)
+          if (scores[r][c] > bestScore) {
+            bestScore = scores[r][c];
+            bestR = r;
+            bestC = c;
+          }
+      if (bestScore < 0) break;
+
+      // Flip it
+      grid[bestR][bestC] = !grid[bestR][bestC];
+      wasFlipped[bestR * totalSize + bestC] = 1;
+      flippedCount++;
+
+      // Re-score the 3x3 neighborhood affected by the flip
+      for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++) {
+          const nr = bestR + dr, nc = bestC + dc;
+          if (nr >= pad && nr < totalSize - pad && nc >= pad && nc < totalSize - pad)
+            scores[nr][nc] = scoreAt(nr, nc);
+        }
+    }
+
+    return flippedCount;
+  }
+
+  // Greedy rectangle packing: scan top-left to bottom-right, at each uncovered
+  // cell find the maximal-area same-color rectangle anchored there.
+  function packGreedy(grid, totalSize) {
+    const used = Array.from({ length: totalSize }, () => new Uint8Array(totalSize));
+
+    function findBestRect(r, c) {
+      const val = grid[r][c];
+      let maxW = 0;
+      while (c + maxW < totalSize && grid[r][c + maxW] === val && !used[r][c + maxW]) maxW++;
+
+      let bestArea = 0, bestW = 0, bestH = 0;
+      let curW = maxW;
+
+      for (let h = 1; r + h - 1 < totalSize; h++) {
+        if (h > 1) {
+          const row = r + h - 1;
+          let newW = 0;
+          while (newW < curW && c + newW < totalSize && grid[row][c + newW] === val && !used[row][c + newW]) newW++;
+          curW = newW;
+          if (curW === 0) break;
+        }
+        const area = curW * h;
+        if (area > bestArea) { bestArea = area; bestW = curW; bestH = h; }
+      }
+      return { w: bestW, h: bestH };
+    }
+
+    const spans = [];
+    for (let r = 0; r < totalSize; r++) spans[r] = new Array(totalSize).fill(null);
+
+    let cellCount = 0;
+    for (let r = 0; r < totalSize; r++) {
+      for (let c = 0; c < totalSize; c++) {
+        if (used[r][c]) continue;
+        const { w, h } = findBestRect(r, c);
+        spans[r][c] = { w, h, dark: grid[r][c] };
+        for (let dr = 0; dr < h; dr++)
+          for (let dc = 0; dc < w; dc++)
+            used[r + dr][c + dc] = 1;
+        cellCount++;
+      }
+    }
+
+    return { spans, cellCount };
+  }
+
+  // Try all 8 orientations of the dihedral group D4 (4 reflections × identity/transpose)
+  // and return the packing with the fewest cells. Different scan orders cause the greedy
+  // algorithm to make different rectangle choices; picking the best eliminates scan-order bias.
+  function packBestOrientation(grid, totalSize) {
+    const N = totalSize;
+
+    // Identity (original scan order) — no grid copy or span transform needed
+    let best = packGreedy(grid, N);
+
+    // Remaining 7 orientations: [transpose, flipH, flipV]
+    const orientations = [
+      [false, true,  false],
+      [false, false, true],
+      [false, true,  true],
+      [true,  false, false],
+      [true,  true,  false],
+      [true,  false, true],
+      [true,  true,  true],
+    ];
+
+    for (const [trans, fH, fV] of orientations) {
+      // Build the transformed grid
+      const tGrid = Array.from({ length: N }, (_, r) => {
+        const row = new Array(N);
+        for (let c = 0; c < N; c++) {
+          let srcR = trans ? c : r;
+          let srcC = trans ? r : c;
+          if (fV) srcR = N - 1 - srcR;
+          if (fH) srcC = N - 1 - srcC;
+          row[c] = grid[srcR][srcC];
+        }
+        return row;
+      });
+
+      const result = packGreedy(tGrid, N);
+      if (result.cellCount >= best.cellCount) continue;
+
+      // Map spans back to original coordinates
+      const newSpans = Array.from({ length: N }, () => new Array(N).fill(null));
+      for (let r = 0; r < N; r++)
+        for (let c = 0; c < N; c++) {
+          const s = result.spans[r][c];
+          if (!s) continue;
+          // Top-left and bottom-right corners in transformed space
+          let tlR = trans ? c : r,              tlC = trans ? r : c;
+          let brR = trans ? (c + s.w - 1) : (r + s.h - 1);
+          let brC = trans ? (r + s.h - 1) : (c + s.w - 1);
+          if (fV) { tlR = N - 1 - tlR; brR = N - 1 - brR; }
+          if (fH) { tlC = N - 1 - tlC; brC = N - 1 - brC; }
+          const minR = Math.min(tlR, brR), minC = Math.min(tlC, brC);
+          const maxR = Math.max(tlR, brR), maxC = Math.max(tlC, brC);
+          newSpans[minR][minC] = { w: maxC - minC + 1, h: maxR - minR + 1, dark: s.dark };
+        }
+      best = { spans: newSpans, cellCount: result.cellCount };
+    }
+
+    return best;
+  }
+
+  function verifyScan(grid, totalSize) {
+    const scale = 10;
+    const w = totalSize * scale;
+    const h = totalSize * scale;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < totalSize; r++)
+      for (let c = 0; c < totalSize; c++)
+        if (grid[r][c]) ctx.fillRect(c * scale, r * scale, scale, scale);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const result = jsQR(imageData.data, w, h);
+    return result ? result.data : null;
   }
 
   function generate() {
@@ -675,44 +827,8 @@
         modulesFlipped = applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevel, budget);
       }
 
-      // Maximal-area rectangle packing with colspan/rowspan
-      const used = Array.from({ length: totalSize }, () => new Uint8Array(totalSize));
-
-      function findBestRect(r, c) {
-        const dark = grid[r][c];
-        let maxW = 0;
-        while (c + maxW < totalSize && grid[r][c + maxW] === dark && !used[r][c + maxW]) maxW++;
-
-        let bestArea = 0, bestW = 0, bestH = 0;
-        let curW = maxW;
-
-        for (let h = 1; r + h - 1 < totalSize; h++) {
-          if (h > 1) {
-            const row = r + h - 1;
-            let newW = 0;
-            while (newW < curW && c + newW < totalSize && grid[row][c + newW] === dark && !used[row][c + newW]) newW++;
-            curW = newW;
-            if (curW === 0) break;
-          }
-          const area = curW * h;
-          if (area > bestArea) { bestArea = area; bestW = curW; bestH = h; }
-        }
-        return { w: bestW, h: bestH };
-      }
-
-      const spans = [];
-      for (let r = 0; r < totalSize; r++) spans[r] = new Array(totalSize).fill(null);
-
-      for (let r = 0; r < totalSize; r++) {
-        for (let c = 0; c < totalSize; c++) {
-          if (used[r][c]) continue;
-          const { w, h } = findBestRect(r, c);
-          spans[r][c] = { w, h, dark: grid[r][c] };
-          for (let dr = 0; dr < h; dr++)
-            for (let dc = 0; dc < w; dc++)
-              used[r + dr][c + dc] = 1;
-        }
-      }
+      // Multi-directional rectangle packing (best of 8 D4 orientations)
+      const { spans } = packBestOrientation(grid, totalSize);
 
       let tableHTML = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-spacing:0;margin:0 auto;font-size:0;line-height:0;background:${bgShort}">`;
       let cellCount = 0;
@@ -749,7 +865,12 @@
       statsEl.style.display = 'block';
 
       if (lossyEnabledEl.checked && modulesFlipped > 0) {
-        lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f84">Verify with a QR scanner</span>`;
+        const decoded = verifyScan(grid, totalSize);
+        if (decoded !== null) {
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+        } else {
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+        }
         lossyStatsEl.style.display = 'block';
       } else {
         lossyStatsEl.style.display = 'none';
