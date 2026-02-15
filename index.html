@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QR → Table</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -429,9 +430,9 @@
           <div class="field">
             <div class="range-row">
               <label for="lossy-budget">Aggressiveness</label>
-              <span class="range-val" id="lossy-budget-val">50%</span>
+              <span class="range-val" id="lossy-budget-val">20%</span>
             </div>
-            <input type="range" id="lossy-budget" min="5" max="100" value="50">
+            <input type="range" id="lossy-budget" min="5" max="100" value="20">
           </div>
           <div style="font-size:0.75rem;color:var(--text-dim);line-height:1.5;margin-top:0.5rem;">
             Flips isolated data modules to create larger mergeable regions. Finder patterns, alignment patterns, timing, format &amp; version info are fully protected. Higher EC levels give more headroom. Always verify with a scanner.
@@ -757,6 +758,25 @@
     return best;
   }
 
+  function verifyScan(grid, totalSize) {
+    const scale = 10;
+    const w = totalSize * scale;
+    const h = totalSize * scale;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < totalSize; r++)
+      for (let c = 0; c < totalSize; c++)
+        if (grid[r][c]) ctx.fillRect(c * scale, r * scale, scale, scale);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const result = jsQR(imageData.data, w, h);
+    return result ? result.data : null;
+  }
+
   function generate() {
     const text = inputEl.value.trim();
     if (!text) {
@@ -845,7 +865,12 @@
       statsEl.style.display = 'block';
 
       if (lossyEnabledEl.checked && modulesFlipped > 0) {
-        lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f84">Verify with a QR scanner</span>`;
+        const decoded = verifyScan(grid, totalSize);
+        if (decoded !== null) {
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+        } else {
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+        }
         lossyStatsEl.style.display = 'block';
       } else {
         lossyStatsEl.style.display = 'none';
