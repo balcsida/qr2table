@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 640px;
+    background: #0c0c0f;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Subtle grid pattern background */
+  body::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(68,170,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(68,170,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Glow effect behind barcodes */
+  .glow {
+    position: absolute;
+    width: 360px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(68,170,255,0.08) 0%, transparent 70%);
+    left: 60px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    width: 1200px;
+    height: 560px;
+    display: flex;
+    align-items: center;
+    gap: 60px;
+    padding: 0 40px;
+  }
+
+  /* Barcode visuals - stacked QR + 1D */
+  .barcode-visual {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  /* 2D QR grid */
+  .qr-grid {
+    display: grid;
+    grid-template-columns: repeat(11, 1fr);
+    gap: 2.5px;
+    width: 210px;
+    height: 210px;
+  }
+
+  .qr-cell {
+    border-radius: 2px;
+  }
+
+  .qr-cell.on { background: #4af; }
+  .qr-cell.off { background: rgba(68,170,255,0.06); }
+  .qr-cell.accent { background: #4aea8b; }
+
+  /* 1D barcode */
+  .barcode-1d {
+    display: flex;
+    align-items: end;
+    gap: 0;
+    height: 56px;
+    width: 210px;
+  }
+
+  .bar {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 1px 1px 0 0;
+  }
+
+  .bar.on { background: #4af; }
+  .bar.off { background: rgba(68,170,255,0.06); }
+  .bar.accent { background: #4aea8b; }
+
+  /* Labels under barcodes */
+  .barcode-labels {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+
+  .barcode-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: #5a5860;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  .barcode-label-sep {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: #3a3840;
+  }
+
+  /* Arrow section */
+  .arrow-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .arrow {
+    font-size: 36px;
+    color: #4af;
+    font-family: 'Instrument Sans', sans-serif;
+    opacity: 0.7;
+  }
+
+  .arrow-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: #8a8890;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  /* Text content */
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(68,170,255,0.1);
+    border: 1px solid rgba(68,170,255,0.2);
+    border-radius: 20px;
+    padding: 6px 16px;
+    width: fit-content;
+  }
+
+  .badge span {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    color: #4af;
+    letter-spacing: 0.5px;
+  }
+
+  .title {
+    font-family: 'DM Mono', monospace;
+    font-size: 72px;
+    font-weight: 500;
+    color: #e8e6e3;
+    letter-spacing: -2px;
+    line-height: 1;
+  }
+
+  .title .accent { color: #4af; }
+
+  .tagline {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 22px;
+    font-weight: 400;
+    color: #8a8890;
+    line-height: 1.5;
+    max-width: 500px;
+  }
+
+  .tagline strong {
+    color: #b8b6b3;
+    font-weight: 600;
+  }
+
+  .features {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .feature-tag {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: #6a6870;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #2a2a32;
+    border-radius: 6px;
+    padding: 5px 12px;
+    letter-spacing: 0.3px;
+  }
+
+  /* HTML table visual representation */
+  .table-visual {
+    position: absolute;
+    right: 30px;
+    bottom: -30px;
+    opacity: 0.05;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: #4af;
+    line-height: 1.6;
+    white-space: pre;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+
+  <div class="table-visual">&lt;table&gt;
+  &lt;tr&gt;
+    &lt;td colspan="3"
+     style="background:#000"&gt;
+    &lt;/td&gt;
+    &lt;td rowspan="2"
+     style="background:#fff"&gt;
+    &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+    &lt;td style="background:#000"&gt;
+    &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/table&gt;</div>
+
+  <div class="container">
+    <!-- Barcode visuals -->
+    <div class="barcode-visual">
+      <div class="qr-grid" id="qr"></div>
+      <div class="barcode-1d" id="barcode1d"></div>
+      <div class="barcode-labels">
+        <span class="barcode-label">QR / Aztec / Data Matrix</span>
+        <span class="barcode-label-sep">+</span>
+        <span class="barcode-label">Code 128 / EAN-13</span>
+      </div>
+    </div>
+
+    <div class="arrow-section">
+      <div class="arrow">&#x2192;</div>
+      <div class="arrow-label">&lt;table&gt;</div>
+    </div>
+
+    <!-- Text content -->
+    <div class="content">
+      <div class="badge">
+        <span>Email-safe barcodes</span>
+      </div>
+      <div class="title">qr<span class="accent">2</span>table</div>
+      <div class="tagline">
+        Generate <strong>1D &amp; 2D barcodes</strong> as pure HTML tables.<br>
+        No images. No base64. Just <strong>&lt;td&gt;</strong> elements.
+      </div>
+      <div class="features">
+        <span class="feature-tag">QR / Aztec / Data Matrix</span>
+        <span class="feature-tag">Code 128 / EAN-13 / UPC-A</span>
+        <span class="feature-tag">works in Gmail &amp; Outlook</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // --- 2D QR grid ---
+  const grid = document.getElementById('qr');
+  const size = 11;
+  const pattern = [];
+
+  for (let r = 0; r < size; r++) {
+    pattern[r] = [];
+    for (let c = 0; c < size; c++) {
+      pattern[r][c] = 0;
+    }
+  }
+
+  // Top-left finder
+  for (let r = 0; r < 4; r++)
+    for (let c = 0; c < 4; c++) {
+      if (r === 0 || r === 3 || c === 0 || c === 3) pattern[r][c] = 1;
+      if (r >= 1 && r <= 2 && c >= 1 && c <= 2) pattern[r][c] = 1;
+    }
+
+  // Top-right finder
+  for (let r = 0; r < 4; r++)
+    for (let c = size-4; c < size; c++) {
+      const lc = c - (size-4);
+      if (r === 0 || r === 3 || lc === 0 || lc === 3) pattern[r][c] = 1;
+      if (r >= 1 && r <= 2 && lc >= 1 && lc <= 2) pattern[r][c] = 1;
+    }
+
+  // Bottom-left finder
+  for (let r = size-4; r < size; r++) {
+    const lr = r - (size-4);
+    for (let c = 0; c < 4; c++) {
+      if (lr === 0 || lr === 3 || c === 0 || c === 3) pattern[r][c] = 1;
+      if (lr >= 1 && lr <= 2 && c >= 1 && c <= 2) pattern[r][c] = 1;
+    }
+  }
+
+  // Data fill
+  const seed = [
+    [4,1],[4,3],[4,5],[4,7],[4,9],
+    [5,0],[5,2],[5,4],[5,8],[5,10],
+    [6,1],[6,3],[6,5],[6,6],[6,9],
+    [7,0],[7,4],[7,6],[7,8],[7,10],
+    [8,2],[8,5],[8,7],[8,9],
+    [9,1],[9,3],[9,6],[9,8],
+    [10,5],[10,7],
+    [1,5],[1,7],[1,9],
+    [2,4],[2,6],[2,8],
+    [3,5],[3,7],[3,9],
+    [0,5],[0,7]
+  ];
+  seed.forEach(([r,c]) => { if (r < size && c < size) pattern[r][c] = 1; });
+
+  const accents2d = [[4,5],[5,4],[6,5],[6,6],[7,6]];
+  const accentSet2d = new Set(accents2d.map(([r,c]) => `${r},${c}`));
+
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'qr-cell';
+      if (accentSet2d.has(`${r},${c}`)) cell.classList.add('accent');
+      else if (pattern[r][c]) cell.classList.add('on');
+      else cell.classList.add('off');
+      grid.appendChild(cell);
+    }
+  }
+
+  // --- 1D Barcode ---
+  const barcode1d = document.getElementById('barcode1d');
+  // Code 128-like pattern
+  const bars = [
+    1,1,0,1,1,0,0,1,0,1,1,1,0,0,1,0,1,0,0,1,1,0,1,0,0,0,1,1,0,1,
+    0,1,1,0,0,1,0,1,1,1,0,0,1,1,0,1,0,0,1,0,1,1,0,0,1,0,1,0,1,1,
+    0,0,1,1,0,1,0,1,0,0,1,1,0,0,1,0,1,1,0,1,1,0,0,1,0,1,1,1,0,0,
+    1,1,0,1,0,0,1,0,1,1
+  ];
+  // A few accent bars to show optimization
+  const accentBars = new Set([12,13,14,27,28,50,51,52]);
+
+  bars.forEach((v, i) => {
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.height = v ? '100%' : '30%';
+    if (accentBars.has(i) && v) bar.classList.add('accent');
+    else if (v) bar.classList.add('on');
+    else bar.classList.add('off');
+    barcode1d.appendChild(bar);
+  });
+</script>
+</body>
+</html>
