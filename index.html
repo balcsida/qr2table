@@ -881,8 +881,8 @@
       } else {
         const bwipOpts = {};
         if (cfg.hasEC) {
-          const ecMap = { L: 1, M: 2, Q: 3, H: 4 };
-          bwipOpts.eclevel = ecMap[ecLevel] || 2;
+          const ecMap = { L: 10, M: 23, Q: 36, H: 50 };
+          bwipOpts.eclevel = ecMap[ecLevel] || 23;
         }
         const result = generateBwip(bcid, text, bwipOpts);
         moduleRows = result.rows;
