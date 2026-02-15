@@ -942,6 +942,19 @@
           ecPct = cfg.hasEC ? { L: 0.10, M: 0.23, Q: 0.36, H: 0.50 }[ecLevel] : cfg.ecRate;
         }
         modulesFlipped = applyLossyCompression(grid, pad, totalRows, totalCols, protect, ecPct, budget);
+
+        // 1D barcodes: enforce column uniformity by replicating the middle
+        // data row to all others. Edge rows adjacent to the quiet zone get
+        // artificially high isolation scores, causing scattered single-row
+        // flips that break the vertical-bar structure.
+        if (cfg.type === '1d' && modulesFlipped > 0) {
+          const refRow = pad + Math.floor(moduleRows / 2);
+          for (let r = pad; r < totalRows - pad; r++) {
+            if (r === refRow) continue;
+            for (let c = pad; c < totalCols - pad; c++)
+              grid[r][c] = grid[refRow][c];
+          }
+        }
       }
 
       // Multi-directional rectangle packing (best of 8 D4 orientations)
