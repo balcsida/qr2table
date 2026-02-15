@@ -470,7 +470,7 @@
             <input type="range" id="lossy-budget" min="5" max="100" value="20">
           </div>
           <div style="font-size:0.75rem;color:var(--text-dim);line-height:1.5;margin-top:0.5rem;">
-            Flips isolated data modules to create larger mergeable regions. Finder patterns, alignment patterns, timing, format &amp; version info are fully protected. Higher EC levels give more headroom. Always verify with a scanner.
+            Flips isolated modules to create larger mergeable regions, reducing HTML size. Structural patterns are protected. Higher error correction gives more headroom. Always verify with a scanner.
           </div>
           <div id="lossy-stats" style="font-family:'DM Mono',monospace;font-size:0.72rem;color:var(--text-dim);margin-top:0.75rem;display:none;"></div>
         </div>
@@ -1046,7 +1046,6 @@
     const cfg = BARCODE_TYPES[bcid];
     const prev = BARCODE_TYPES[updateUIForBarcodeType._prev || 'qrcode'];
     ecFieldEl.style.display = cfg.hasEC ? '' : 'none';
-    lossyPanelEl.style.display = cfg.hasLossy ? '' : 'none';
     inputEl.placeholder = cfg.placeholder;
     if (!inputEl.value.trim() || inputEl.value.trim() === prev.defaultVal) {
       inputEl.value = cfg.defaultVal;
