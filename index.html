@@ -929,11 +929,19 @@
       const bgShort = shortHex(bg);
       const cs = cellSize;
 
-      // Apply lossy compression (QR only)
+      // Apply lossy compression
       let modulesFlipped = 0;
       if (cfg.hasLossy && lossyEnabledEl.checked) {
         const budget = parseInt(lossyBudgetEl.value) / 100;
-        modulesFlipped = applyLossyCompression(grid, moduleRows, pad, totalRows, ecLevel, budget);
+        let protect, ecPct;
+        if (bcid === 'qrcode') {
+          protect = buildProtectionMask(moduleRows, pad, totalRows);
+          ecPct = { L: 0.07, M: 0.15, Q: 0.25, H: 0.30 }[ecLevel];
+        } else {
+          protect = buildQuietZoneMask(pad, totalRows, totalCols);
+          ecPct = cfg.hasEC ? { L: 0.10, M: 0.23, Q: 0.36, H: 0.50 }[ecLevel] : cfg.ecRate;
+        }
+        modulesFlipped = applyLossyCompression(grid, pad, totalRows, totalCols, protect, ecPct, budget);
       }
 
       // Multi-directional rectangle packing (best of 8 D4 orientations)
@@ -975,13 +983,17 @@
       statsEl.innerHTML = `<span>${totalRows}×${totalCols}</span> grid · <span>${cellCount}</span> / ${totalCells} cells (<span>-${reduction}%</span>) · <span>${htmlSize} KB</span>`;
       statsEl.style.display = 'block';
 
-      // Scan verification (QR only)
+      // Scan verification
       if (cfg.hasLossy && lossyEnabledEl.checked && modulesFlipped > 0) {
-        const decoded = verifyScan(grid, totalRows);
-        if (decoded !== null) {
-          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+        if (bcid === 'qrcode') {
+          const decoded = verifyScan(grid, totalRows);
+          if (decoded !== null) {
+            lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+          } else {
+            lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+          }
         } else {
-          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--text-dim)">Scan verification not available — test with a scanner</span>`;
         }
         lossyStatsEl.style.display = 'block';
       } else {
