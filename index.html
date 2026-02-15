@@ -6,6 +6,7 @@
 <title>qr2table</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bwip-js@4/dist/bwip-js-min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -381,7 +382,7 @@
 <div class="app">
   <header>
     <h1>qr2table <span class="tag">Email-safe</span></h1>
-    <p>Generate QR codes as pure HTML tables — no images needed, works in every email client.</p>
+    <p>Generate barcodes as pure HTML tables — no images needed, works in every email client.</p>
   </header>
 
   <div class="layout">
@@ -390,10 +391,26 @@
       <div class="panel">
         <div class="panel-title">Content</div>
         <div class="field">
+          <label>Barcode type</label>
+          <select id="barcode-type">
+            <optgroup label="2D Barcodes">
+              <option value="qrcode" selected>QR Code</option>
+              <option value="azteccode">Aztec Code</option>
+              <option value="datamatrix">Data Matrix</option>
+            </optgroup>
+            <optgroup label="1D Barcodes">
+              <option value="code128">Code 128</option>
+              <option value="code39">Code 39</option>
+              <option value="ean13">EAN-13</option>
+              <option value="upca">UPC-A</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="field">
           <label for="qr-input">Text or URL</label>
           <textarea id="qr-input" placeholder="https://example.com" spellcheck="false">https://example.com</textarea>
         </div>
-        <div class="field">
+        <div class="field" id="ec-field">
           <label>Error correction</label>
           <select id="ec-level">
             <option value="L">Low (7%) — smaller QR</option>
@@ -453,7 +470,7 @@
             <input type="range" id="lossy-budget" min="5" max="100" value="20">
           </div>
           <div style="font-size:0.75rem;color:var(--text-dim);line-height:1.5;margin-top:0.5rem;">
-            Flips isolated data modules to create larger mergeable regions. Finder patterns, alignment patterns, timing, format &amp; version info are fully protected. Higher EC levels give more headroom. Always verify with a scanner.
+            Flips isolated modules to create larger mergeable regions, reducing HTML size. Structural patterns are protected. Higher error correction gives more headroom. Always verify with a scanner.
           </div>
           <div id="lossy-stats" style="font-family:'DM Mono',monospace;font-size:0.72rem;color:var(--text-dim);margin-top:0.75rem;display:none;"></div>
         </div>
@@ -488,7 +505,19 @@
 <div class="toast" id="toast">Copied to clipboard!</div>
 
 <script>
+  const BARCODE_TYPES = {
+    qrcode:     { lib: 'qr',   type: '2d', hasEC: true,  hasLossy: true, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    azteccode:  { lib: 'bwip', type: '2d', hasEC: true,  hasLossy: true, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    datamatrix: { lib: 'bwip', type: '2d', hasEC: false, hasLossy: true, ecRate: 0.15, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    code128:    { lib: 'bwip', type: '1d', hasEC: false, hasLossy: true, ecRate: 0.02, placeholder: 'https://example.com', defaultVal: 'https://example.com' },
+    code39:     { lib: 'bwip', type: '1d', hasEC: false, hasLossy: true, ecRate: 0.02, placeholder: 'HELLO 2025',          defaultVal: 'HELLO 2025' },
+    ean13:      { lib: 'bwip', type: '1d', hasEC: false, hasLossy: true, ecRate: 0.02, placeholder: '590123412345',        defaultVal: '590123412345' },
+    upca:       { lib: 'bwip', type: '1d', hasEC: false, hasLossy: true, ecRate: 0.02, placeholder: '01234567890',         defaultVal: '01234567890' },
+  };
+
+  const barcodeTypeEl = document.getElementById('barcode-type');
   const inputEl = document.getElementById('qr-input');
+  const ecFieldEl = document.getElementById('ec-field');
   const ecEl = document.getElementById('ec-level');
   const fgEl = document.getElementById('fg-color');
   const bgEl = document.getElementById('bg-color');
@@ -597,56 +626,67 @@
     return p;
   }
 
+  // Build a protection mask that only protects quiet zone padding cells.
+  // Used for non-QR barcode types where structural patterns are naturally
+  // avoided by the isolation-scoring algorithm.
+  function buildQuietZoneMask(pad, totalRows, totalCols) {
+    const p = Array.from({ length: totalRows }, () => new Uint8Array(totalCols));
+    if (pad > 0) {
+      for (let r = 0; r < totalRows; r++)
+        for (let c = 0; c < totalCols; c++)
+          if (r < pad || r >= totalRows - pad || c < pad || c >= totalCols - pad)
+            p[r][c] = 1;
+    }
+    return p;
+  }
+
   // Lossy compression: iteratively flip isolated data modules to aid merging.
   // Enhanced with per-flip re-scoring so each flip updates the isolation
   // landscape for its neighbors, producing better cascading improvements.
-  function applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevelStr, budget) {
-    const protect = buildProtectionMask(moduleCount, pad, totalSize);
-    const ecRates = { L: 0.07, M: 0.15, Q: 0.25, H: 0.30 };
-    const ecPct = ecRates[ecLevelStr] || 0.07;
-
+  // Accepts rectangular grids and an external protection mask + EC percentage.
+  function applyLossyCompression(grid, pad, totalRows, totalCols, protect, ecPct, budget) {
     let dataModules = 0;
-    for (let r = pad; r < totalSize - pad; r++)
-      for (let c = pad; c < totalSize - pad; c++)
+    for (let r = pad; r < totalRows - pad; r++)
+      for (let c = pad; c < totalCols - pad; c++)
         if (!protect[r][c]) dataModules++;
 
     const maxFlips = Math.floor(dataModules * ecPct * 0.5 * budget);
     if (maxFlips === 0) return 0;
 
     // Prevent double-flips (flipping a module back wastes budget)
-    const wasFlipped = new Uint8Array(totalSize * totalSize);
+    const wasFlipped = new Uint8Array(totalRows * totalCols);
 
     // Score a module by isolation from its 8-connected neighborhood.
     // Cardinal diffs drive the threshold; diagonal diffs refine tie-breaking.
     function scoreAt(r, c) {
-      if (protect[r][c] || wasFlipped[r * totalSize + c]) return -1;
+      if (protect[r][c] || wasFlipped[r * totalCols + c]) return -1;
       const val = grid[r][c];
       let cardDiff = 0;
       if (r > 0 && grid[r - 1][c] !== val) cardDiff++;
-      if (r < totalSize - 1 && grid[r + 1][c] !== val) cardDiff++;
+      if (r < totalRows - 1 && grid[r + 1][c] !== val) cardDiff++;
       if (c > 0 && grid[r][c - 1] !== val) cardDiff++;
-      if (c < totalSize - 1 && grid[r][c + 1] !== val) cardDiff++;
+      if (c < totalCols - 1 && grid[r][c + 1] !== val) cardDiff++;
       if (cardDiff < 2) return -1;
       let diagDiff = 0;
       if (r > 0 && c > 0 && grid[r - 1][c - 1] !== val) diagDiff++;
-      if (r > 0 && c < totalSize - 1 && grid[r - 1][c + 1] !== val) diagDiff++;
-      if (r < totalSize - 1 && c > 0 && grid[r + 1][c - 1] !== val) diagDiff++;
-      if (r < totalSize - 1 && c < totalSize - 1 && grid[r + 1][c + 1] !== val) diagDiff++;
+      if (r > 0 && c < totalCols - 1 && grid[r - 1][c + 1] !== val) diagDiff++;
+      if (r < totalRows - 1 && c > 0 && grid[r + 1][c - 1] !== val) diagDiff++;
+      if (r < totalRows - 1 && c < totalCols - 1 && grid[r + 1][c + 1] !== val) diagDiff++;
       return cardDiff * 10 + diagDiff * 3;
     }
 
     // Build initial score grid
-    const scores = Array.from({ length: totalSize }, () => new Array(totalSize).fill(-1));
-    for (let r = pad; r < totalSize - pad; r++)
-      for (let c = pad; c < totalSize - pad; c++)
+    const scores = Array.from({ length: totalRows }, () => new Array(totalCols).fill(-1));
+    for (let r = pad; r < totalRows - pad; r++)
+      for (let c = pad; c < totalCols - pad; c++)
         scores[r][c] = scoreAt(r, c);
 
     let flippedCount = 0;
     while (flippedCount < maxFlips) {
       // Find the most isolated module
       let bestR = -1, bestC = -1, bestScore = -1;
-      for (let r = pad; r < totalSize - pad; r++)
-        for (let c = pad; c < totalSize - pad; c++)
+      for (let r = pad; r < totalRows - pad; r++)
+        for (let c = pad; c < totalCols - pad; c++)
           if (scores[r][c] > bestScore) {
             bestScore = scores[r][c];
             bestR = r;
@@ -656,14 +696,14 @@
 
       // Flip it
       grid[bestR][bestC] = !grid[bestR][bestC];
-      wasFlipped[bestR * totalSize + bestC] = 1;
+      wasFlipped[bestR * totalCols + bestC] = 1;
       flippedCount++;
 
       // Re-score the 3x3 neighborhood affected by the flip
       for (let dr = -1; dr <= 1; dr++)
         for (let dc = -1; dc <= 1; dc++) {
           const nr = bestR + dr, nc = bestC + dc;
-          if (nr >= pad && nr < totalSize - pad && nc >= pad && nc < totalSize - pad)
+          if (nr >= pad && nr < totalRows - pad && nc >= pad && nc < totalCols - pad)
             scores[nr][nc] = scoreAt(nr, nc);
         }
     }
@@ -673,22 +713,22 @@
 
   // Greedy rectangle packing: scan top-left to bottom-right, at each uncovered
   // cell find the maximal-area same-color rectangle anchored there.
-  function packGreedy(grid, totalSize) {
-    const used = Array.from({ length: totalSize }, () => new Uint8Array(totalSize));
+  function packGreedy(grid, totalRows, totalCols) {
+    const used = Array.from({ length: totalRows }, () => new Uint8Array(totalCols));
 
     function findBestRect(r, c) {
       const val = grid[r][c];
       let maxW = 0;
-      while (c + maxW < totalSize && grid[r][c + maxW] === val && !used[r][c + maxW]) maxW++;
+      while (c + maxW < totalCols && grid[r][c + maxW] === val && !used[r][c + maxW]) maxW++;
 
       let bestArea = 0, bestW = 0, bestH = 0;
       let curW = maxW;
 
-      for (let h = 1; r + h - 1 < totalSize; h++) {
+      for (let h = 1; r + h - 1 < totalRows; h++) {
         if (h > 1) {
           const row = r + h - 1;
           let newW = 0;
-          while (newW < curW && c + newW < totalSize && grid[row][c + newW] === val && !used[row][c + newW]) newW++;
+          while (newW < curW && c + newW < totalCols && grid[row][c + newW] === val && !used[row][c + newW]) newW++;
           curW = newW;
           if (curW === 0) break;
         }
@@ -699,11 +739,11 @@
     }
 
     const spans = [];
-    for (let r = 0; r < totalSize; r++) spans[r] = new Array(totalSize).fill(null);
+    for (let r = 0; r < totalRows; r++) spans[r] = new Array(totalCols).fill(null);
 
     let cellCount = 0;
-    for (let r = 0; r < totalSize; r++) {
-      for (let c = 0; c < totalSize; c++) {
+    for (let r = 0; r < totalRows; r++) {
+      for (let c = 0; c < totalCols; c++) {
         if (used[r][c]) continue;
         const { w, h } = findBestRect(r, c);
         spans[r][c] = { w, h, dark: grid[r][c] };
@@ -720,11 +760,11 @@
   // Try all 8 orientations of the dihedral group D4 (4 reflections × identity/transpose)
   // and return the packing with the fewest cells. Different scan orders cause the greedy
   // algorithm to make different rectangle choices; picking the best eliminates scan-order bias.
-  function packBestOrientation(grid, totalSize) {
-    const N = totalSize;
+  function packBestOrientation(grid, totalRows, totalCols) {
+    const R = totalRows, C = totalCols;
 
     // Identity (original scan order) — no grid copy or span transform needed
-    let best = packGreedy(grid, N);
+    let best = packGreedy(grid, R, C);
 
     // Remaining 7 orientations: [transpose, flipH, flipV]
     const orientations = [
@@ -738,34 +778,36 @@
     ];
 
     for (const [trans, fH, fV] of orientations) {
+      // Transposing swaps rows and cols
+      const tR = trans ? C : R, tC = trans ? R : C;
       // Build the transformed grid
-      const tGrid = Array.from({ length: N }, (_, r) => {
-        const row = new Array(N);
-        for (let c = 0; c < N; c++) {
+      const tGrid = Array.from({ length: tR }, (_, r) => {
+        const row = new Array(tC);
+        for (let c = 0; c < tC; c++) {
           let srcR = trans ? c : r;
           let srcC = trans ? r : c;
-          if (fV) srcR = N - 1 - srcR;
-          if (fH) srcC = N - 1 - srcC;
+          if (fV) srcR = R - 1 - srcR;
+          if (fH) srcC = C - 1 - srcC;
           row[c] = grid[srcR][srcC];
         }
         return row;
       });
 
-      const result = packGreedy(tGrid, N);
+      const result = packGreedy(tGrid, tR, tC);
       if (result.cellCount >= best.cellCount) continue;
 
       // Map spans back to original coordinates
-      const newSpans = Array.from({ length: N }, () => new Array(N).fill(null));
-      for (let r = 0; r < N; r++)
-        for (let c = 0; c < N; c++) {
+      const newSpans = Array.from({ length: R }, () => new Array(C).fill(null));
+      for (let r = 0; r < tR; r++)
+        for (let c = 0; c < tC; c++) {
           const s = result.spans[r][c];
           if (!s) continue;
           // Top-left and bottom-right corners in transformed space
           let tlR = trans ? c : r,              tlC = trans ? r : c;
           let brR = trans ? (c + s.w - 1) : (r + s.h - 1);
           let brC = trans ? (r + s.h - 1) : (c + s.w - 1);
-          if (fV) { tlR = N - 1 - tlR; brR = N - 1 - brR; }
-          if (fH) { tlC = N - 1 - tlC; brC = N - 1 - brC; }
+          if (fV) { tlR = R - 1 - tlR; brR = R - 1 - brR; }
+          if (fH) { tlC = C - 1 - tlC; brC = C - 1 - brC; }
           const minR = Math.min(tlR, brR), minC = Math.min(tlC, brC);
           const maxR = Math.max(tlR, brR), maxC = Math.max(tlC, brC);
           newSpans[minR][minC] = { w: maxC - minC + 1, h: maxR - minR + 1, dark: s.dark };
@@ -774,6 +816,21 @@
     }
 
     return best;
+  }
+
+  function generateBwip(bcid, text, options) {
+    const canvas = document.createElement('canvas');
+    bwipjs.toCanvas(canvas, { bcid, text, scale: 1, includetext: false, padding: 0, ...options });
+    const ctx = canvas.getContext('2d');
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const grid = [];
+    for (let r = 0; r < canvas.height; r++) {
+      grid[r] = [];
+      for (let c = 0; c < canvas.width; c++) {
+        grid[r][c] = img.data[(r * canvas.width + c) * 4 + 3] > 127;
+      }
+    }
+    return { grid, rows: canvas.height, cols: canvas.width };
   }
 
   function verifyScan(grid, totalSize) {
@@ -798,35 +855,69 @@
   function generate() {
     const text = inputEl.value.trim();
     if (!text) {
-      previewArea.innerHTML = '<div class="placeholder-msg"><div class="icon">✏️</div>Enter text or a URL to generate a QR code</div>';
+      previewArea.innerHTML = '<div class="placeholder-msg"><div class="icon">✏️</div>Enter text or a URL to generate a barcode</div>';
       statsEl.style.display = 'none';
       return;
     }
 
+    const bcid = barcodeTypeEl.value;
+    const cfg = BARCODE_TYPES[bcid];
     const ecLevel = ecEl.value;
     const fg = fgEl.value;
     const bg = bgEl.value;
     const cellSize = parseInt(cellSizeEl.value);
     const quietZone = quietEl.checked;
+    const pad = quietZone ? 4 : 0;
 
     try {
-      const qr = qrcode(0, ecLevel);
-      qr.addData(text);
-      qr.make();
+      let grid, moduleRows, moduleCols;
 
-      const moduleCount = qr.getModuleCount();
-      const pad = quietZone ? 4 : 0;
-      const totalSize = moduleCount + pad * 2;
-
-      // Build a boolean grid (true = dark)
-      const grid = [];
-      for (let r = 0; r < totalSize; r++) {
-        grid[r] = [];
-        for (let c = 0; c < totalSize; c++) {
-          const qr_r = r - pad, qr_c = c - pad;
-          grid[r][c] = (qr_r >= 0 && qr_r < moduleCount && qr_c >= 0 && qr_c < moduleCount) ? qr.isDark(qr_r, qr_c) : false;
+      if (cfg.lib === 'qr') {
+        const qr = qrcode(0, ecLevel);
+        qr.addData(text);
+        qr.make();
+        const moduleCount = qr.getModuleCount();
+        moduleRows = moduleCount;
+        moduleCols = moduleCount;
+        grid = [];
+        const totalR = moduleRows + pad * 2;
+        const totalC = moduleCols + pad * 2;
+        for (let r = 0; r < totalR; r++) {
+          grid[r] = [];
+          for (let c = 0; c < totalC; c++) {
+            const qr_r = r - pad, qr_c = c - pad;
+            grid[r][c] = (qr_r >= 0 && qr_r < moduleCount && qr_c >= 0 && qr_c < moduleCount) ? qr.isDark(qr_r, qr_c) : false;
+          }
+        }
+      } else {
+        const bwipOpts = {};
+        if (cfg.hasEC) {
+          const ecMap = { L: 10, M: 23, Q: 36, H: 50 };
+          bwipOpts.eclevel = ecMap[ecLevel] || 23;
+        }
+        const result = generateBwip(bcid, text, bwipOpts);
+        moduleRows = result.rows;
+        moduleCols = result.cols;
+        // Wrap in quiet zone padding
+        if (pad > 0) {
+          const totalR = moduleRows + pad * 2;
+          const totalC = moduleCols + pad * 2;
+          const padded = [];
+          for (let r = 0; r < totalR; r++) {
+            padded[r] = [];
+            for (let c = 0; c < totalC; c++) {
+              const sr = r - pad, sc = c - pad;
+              padded[r][c] = (sr >= 0 && sr < moduleRows && sc >= 0 && sc < moduleCols) ? result.grid[sr][sc] : false;
+            }
+          }
+          grid = padded;
+        } else {
+          grid = result.grid;
         }
       }
+
+      const totalRows = moduleRows + pad * 2;
+      const totalCols = moduleCols + pad * 2;
 
       // Shorten hex colors
       function shortHex(hex) {
@@ -838,23 +929,44 @@
       const bgShort = shortHex(bg);
       const cs = cellSize;
 
-      // Apply lossy compression if enabled
+      // Apply lossy compression
       let modulesFlipped = 0;
-      if (lossyEnabledEl.checked) {
+      if (cfg.hasLossy && lossyEnabledEl.checked) {
         const budget = parseInt(lossyBudgetEl.value) / 100;
-        modulesFlipped = applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevel, budget);
+        let protect, ecPct;
+        if (bcid === 'qrcode') {
+          protect = buildProtectionMask(moduleRows, pad, totalRows);
+          ecPct = { L: 0.07, M: 0.15, Q: 0.25, H: 0.30 }[ecLevel];
+        } else {
+          protect = buildQuietZoneMask(pad, totalRows, totalCols);
+          ecPct = cfg.hasEC ? { L: 0.10, M: 0.23, Q: 0.36, H: 0.50 }[ecLevel] : cfg.ecRate;
+        }
+        modulesFlipped = applyLossyCompression(grid, pad, totalRows, totalCols, protect, ecPct, budget);
+
+        // 1D barcodes: enforce column uniformity by replicating the middle
+        // data row to all others. Edge rows adjacent to the quiet zone get
+        // artificially high isolation scores, causing scattered single-row
+        // flips that break the vertical-bar structure.
+        if (cfg.type === '1d' && modulesFlipped > 0) {
+          const refRow = pad + Math.floor(moduleRows / 2);
+          for (let r = pad; r < totalRows - pad; r++) {
+            if (r === refRow) continue;
+            for (let c = pad; c < totalCols - pad; c++)
+              grid[r][c] = grid[refRow][c];
+          }
+        }
       }
 
       // Multi-directional rectangle packing (best of 8 D4 orientations)
-      const { spans } = packBestOrientation(grid, totalSize);
+      const { spans } = packBestOrientation(grid, totalRows, totalCols);
 
       let tableHTML = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-spacing:0;margin:0 auto;font-size:0;line-height:0;background:${bgShort}">`;
       let cellCount = 0;
-      for (let r = 0; r < totalSize; r++) {
+      for (let r = 0; r < totalRows; r++) {
         tableHTML += '<tr>';
         // Zero-width sizing cell to lock row height in Safari
         tableHTML += `<td style="width:0;height:${cs}px;padding:0"></td>`;
-        for (let c = 0; c < totalSize; c++) {
+        for (let c = 0; c < totalCols; c++) {
           const s = spans[r][c];
           if (!s) continue;
           cellCount++;
@@ -878,18 +990,23 @@
       // Render preview
       previewArea.innerHTML = `<div class="qr-container" style="background:${bgShort}">${tableHTML}</div>`;
 
-      const totalCells = totalSize * totalSize;
+      const totalCells = totalRows * totalCols;
       const htmlSize = (wrappedHTML.length / 1024).toFixed(1);
       const reduction = ((1 - cellCount / totalCells) * 100).toFixed(0);
-      statsEl.innerHTML = `<span>${totalSize}×${totalSize}</span> grid · <span>${cellCount}</span> / ${totalCells} cells (<span>-${reduction}%</span>) · <span>${htmlSize} KB</span>`;
+      statsEl.innerHTML = `<span>${totalRows}×${totalCols}</span> grid · <span>${cellCount}</span> / ${totalCells} cells (<span>-${reduction}%</span>) · <span>${htmlSize} KB</span>`;
       statsEl.style.display = 'block';
 
-      if (lossyEnabledEl.checked && modulesFlipped > 0) {
-        const decoded = verifyScan(grid, totalSize);
-        if (decoded !== null) {
-          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+      // Scan verification
+      if (cfg.hasLossy && lossyEnabledEl.checked && modulesFlipped > 0) {
+        if (bcid === 'qrcode') {
+          const decoded = verifyScan(grid, totalRows);
+          if (decoded !== null) {
+            lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--success)">✓ Scan verified</span>`;
+          } else {
+            lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+          }
         } else {
-          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
+          lossyStatsEl.innerHTML = `Flipped <span style="color:var(--accent)">${modulesFlipped}</span> modules · <span style="color:var(--text-dim)">Scan verification not available — test with a scanner</span>`;
         }
         lossyStatsEl.style.display = 'block';
       } else {
@@ -897,7 +1014,7 @@
       }
 
     } catch (e) {
-      previewArea.innerHTML = `<div class="placeholder-msg"><div class="icon">⚠️</div>Content too long for this error correction level.<br>Try reducing text or lowering error correction.</div>`;
+      previewArea.innerHTML = `<div class="placeholder-msg"><div class="icon">⚠️</div>${cfg.lib === 'qr' ? 'Content too long for this error correction level.<br>Try reducing text or lowering error correction.' : 'Could not generate barcode.<br>Check that your input is valid for this barcode type.'}</div>`;
       statsEl.style.display = 'none';
     }
   }
@@ -934,6 +1051,21 @@
   fgEl.addEventListener('input', () => { fgHex.textContent = fgEl.value; generate(); });
   bgEl.addEventListener('input', () => { bgHex.textContent = bgEl.value; generate(); });
   cellSizeEl.addEventListener('input', () => { cellSizeVal.textContent = cellSizeEl.value + 'px'; generate(); });
+
+  function updateUIForBarcodeType() {
+    const bcid = barcodeTypeEl.value;
+    const cfg = BARCODE_TYPES[bcid];
+    const prev = BARCODE_TYPES[updateUIForBarcodeType._prev || 'qrcode'];
+    ecFieldEl.style.display = cfg.hasEC ? '' : 'none';
+    inputEl.placeholder = cfg.placeholder;
+    if (!inputEl.value.trim() || inputEl.value.trim() === prev.defaultVal) {
+      inputEl.value = cfg.defaultVal;
+    }
+    updateUIForBarcodeType._prev = bcid;
+    generate();
+  }
+
+  barcodeTypeEl.addEventListener('change', updateUIForBarcodeType);
 
   let debounce;
   inputEl.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(generate, 200); });
