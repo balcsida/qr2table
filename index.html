@@ -1039,8 +1039,6 @@
   bgEl.addEventListener('input', () => { bgHex.textContent = bgEl.value; generate(); });
   cellSizeEl.addEventListener('input', () => { cellSizeVal.textContent = cellSizeEl.value + 'px'; generate(); });
 
-  const lossyPanelEl = lossyEnabledEl.closest('.panel');
-
   function updateUIForBarcodeType() {
     const bcid = barcodeTypeEl.value;
     const cfg = BARCODE_TYPES[bcid];
