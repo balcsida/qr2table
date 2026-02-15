@@ -160,9 +160,10 @@
     cursor: pointer;
     background: none;
     padding: 0;
+    overflow: hidden;
   }
 
-  input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; border: none; }
   input[type="color"]::-webkit-color-swatch { border: 1px solid #444; border-radius: 5px; }
 
   .color-hex {
@@ -172,9 +173,24 @@
   }
 
   input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
-    accent-color: var(--accent);
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    outline: none;
     margin-top: 0.3rem;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
   }
 
   .range-row {
@@ -192,11 +208,13 @@
   }
 
   select {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
-    background: var(--surface-2);
+    background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238a8890' d='M1.4 0L6 4.6 10.6 0 12 1.4l-6 6-6-6z'/%3E%3C/svg%3E") no-repeat right 0.9rem center;
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.65rem 0.9rem;
+    padding: 0.65rem 2.2rem 0.65rem 0.9rem;
     color: var(--text);
     font-family: 'Instrument Sans', sans-serif;
     font-size: 0.85rem;
