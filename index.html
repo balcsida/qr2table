@@ -652,6 +652,111 @@
     return flippedCount;
   }
 
+  // Greedy rectangle packing: scan top-left to bottom-right, at each uncovered
+  // cell find the maximal-area same-color rectangle anchored there.
+  function packGreedy(grid, totalSize) {
+    const used = Array.from({ length: totalSize }, () => new Uint8Array(totalSize));
+
+    function findBestRect(r, c) {
+      const val = grid[r][c];
+      let maxW = 0;
+      while (c + maxW < totalSize && grid[r][c + maxW] === val && !used[r][c + maxW]) maxW++;
+
+      let bestArea = 0, bestW = 0, bestH = 0;
+      let curW = maxW;
+
+      for (let h = 1; r + h - 1 < totalSize; h++) {
+        if (h > 1) {
+          const row = r + h - 1;
+          let newW = 0;
+          while (newW < curW && c + newW < totalSize && grid[row][c + newW] === val && !used[row][c + newW]) newW++;
+          curW = newW;
+          if (curW === 0) break;
+        }
+        const area = curW * h;
+        if (area > bestArea) { bestArea = area; bestW = curW; bestH = h; }
+      }
+      return { w: bestW, h: bestH };
+    }
+
+    const spans = [];
+    for (let r = 0; r < totalSize; r++) spans[r] = new Array(totalSize).fill(null);
+
+    let cellCount = 0;
+    for (let r = 0; r < totalSize; r++) {
+      for (let c = 0; c < totalSize; c++) {
+        if (used[r][c]) continue;
+        const { w, h } = findBestRect(r, c);
+        spans[r][c] = { w, h, dark: grid[r][c] };
+        for (let dr = 0; dr < h; dr++)
+          for (let dc = 0; dc < w; dc++)
+            used[r + dr][c + dc] = 1;
+        cellCount++;
+      }
+    }
+
+    return { spans, cellCount };
+  }
+
+  // Try all 8 orientations of the dihedral group D4 (4 reflections × identity/transpose)
+  // and return the packing with the fewest cells. Different scan orders cause the greedy
+  // algorithm to make different rectangle choices; picking the best eliminates scan-order bias.
+  function packBestOrientation(grid, totalSize) {
+    const N = totalSize;
+
+    // Identity (original scan order) — no grid copy or span transform needed
+    let best = packGreedy(grid, N);
+
+    // Remaining 7 orientations: [transpose, flipH, flipV]
+    const orientations = [
+      [false, true,  false],
+      [false, false, true],
+      [false, true,  true],
+      [true,  false, false],
+      [true,  true,  false],
+      [true,  false, true],
+      [true,  true,  true],
+    ];
+
+    for (const [trans, fH, fV] of orientations) {
+      // Build the transformed grid
+      const tGrid = Array.from({ length: N }, (_, r) => {
+        const row = new Array(N);
+        for (let c = 0; c < N; c++) {
+          let srcR = trans ? c : r;
+          let srcC = trans ? r : c;
+          if (fV) srcR = N - 1 - srcR;
+          if (fH) srcC = N - 1 - srcC;
+          row[c] = grid[srcR][srcC];
+        }
+        return row;
+      });
+
+      const result = packGreedy(tGrid, N);
+      if (result.cellCount >= best.cellCount) continue;
+
+      // Map spans back to original coordinates
+      const newSpans = Array.from({ length: N }, () => new Array(N).fill(null));
+      for (let r = 0; r < N; r++)
+        for (let c = 0; c < N; c++) {
+          const s = result.spans[r][c];
+          if (!s) continue;
+          // Top-left and bottom-right corners in transformed space
+          let tlR = trans ? c : r,              tlC = trans ? r : c;
+          let brR = trans ? (c + s.w - 1) : (r + s.h - 1);
+          let brC = trans ? (r + s.h - 1) : (c + s.w - 1);
+          if (fV) { tlR = N - 1 - tlR; brR = N - 1 - brR; }
+          if (fH) { tlC = N - 1 - tlC; brC = N - 1 - brC; }
+          const minR = Math.min(tlR, brR), minC = Math.min(tlC, brC);
+          const maxR = Math.max(tlR, brR), maxC = Math.max(tlC, brC);
+          newSpans[minR][minC] = { w: maxC - minC + 1, h: maxR - minR + 1, dark: s.dark };
+        }
+      best = { spans: newSpans, cellCount: result.cellCount };
+    }
+
+    return best;
+  }
+
   function generate() {
     const text = inputEl.value.trim();
     if (!text) {
@@ -702,44 +807,8 @@
         modulesFlipped = applyLossyCompression(grid, moduleCount, pad, totalSize, ecLevel, budget);
       }
 
-      // Maximal-area rectangle packing with colspan/rowspan
-      const used = Array.from({ length: totalSize }, () => new Uint8Array(totalSize));
-
-      function findBestRect(r, c) {
-        const dark = grid[r][c];
-        let maxW = 0;
-        while (c + maxW < totalSize && grid[r][c + maxW] === dark && !used[r][c + maxW]) maxW++;
-
-        let bestArea = 0, bestW = 0, bestH = 0;
-        let curW = maxW;
-
-        for (let h = 1; r + h - 1 < totalSize; h++) {
-          if (h > 1) {
-            const row = r + h - 1;
-            let newW = 0;
-            while (newW < curW && c + newW < totalSize && grid[row][c + newW] === dark && !used[row][c + newW]) newW++;
-            curW = newW;
-            if (curW === 0) break;
-          }
-          const area = curW * h;
-          if (area > bestArea) { bestArea = area; bestW = curW; bestH = h; }
-        }
-        return { w: bestW, h: bestH };
-      }
-
-      const spans = [];
-      for (let r = 0; r < totalSize; r++) spans[r] = new Array(totalSize).fill(null);
-
-      for (let r = 0; r < totalSize; r++) {
-        for (let c = 0; c < totalSize; c++) {
-          if (used[r][c]) continue;
-          const { w, h } = findBestRect(r, c);
-          spans[r][c] = { w, h, dark: grid[r][c] };
-          for (let dr = 0; dr < h; dr++)
-            for (let dc = 0; dc < w; dc++)
-              used[r + dr][c + dc] = 1;
-        }
-      }
+      // Multi-directional rectangle packing (best of 8 D4 orientations)
+      const { spans } = packBestOrientation(grid, totalSize);
 
       let tableHTML = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-spacing:0;margin:0 auto;font-size:0;line-height:0;background:${bgShort}">`;
       let cellCount = 0;
