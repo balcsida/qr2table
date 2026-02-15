@@ -775,8 +775,8 @@
         for (let c = 0; c < tC; c++) {
           let srcR = trans ? c : r;
           let srcC = trans ? r : c;
-          if (fV) srcR = (trans ? C : R) - 1 - srcR;
-          if (fH) srcC = (trans ? R : C) - 1 - srcC;
+          if (fV) srcR = R - 1 - srcR;
+          if (fH) srcC = C - 1 - srcC;
           row[c] = grid[srcR][srcC];
         }
         return row;
@@ -795,8 +795,8 @@
           let tlR = trans ? c : r,              tlC = trans ? r : c;
           let brR = trans ? (c + s.w - 1) : (r + s.h - 1);
           let brC = trans ? (r + s.h - 1) : (c + s.w - 1);
-          if (fV) { tlR = (trans ? C : R) - 1 - tlR; brR = (trans ? C : R) - 1 - brR; }
-          if (fH) { tlC = (trans ? R : C) - 1 - tlC; brC = (trans ? R : C) - 1 - brC; }
+          if (fV) { tlR = R - 1 - tlR; brR = R - 1 - brR; }
+          if (fH) { tlC = C - 1 - tlC; brC = C - 1 - brC; }
           const minR = Math.min(tlR, brR), minC = Math.min(tlC, brC);
           const maxR = Math.max(tlR, brR), maxC = Math.max(tlC, brC);
           newSpans[minR][minC] = { w: maxC - minC + 1, h: maxR - minR + 1, dark: s.dark };
@@ -808,16 +808,18 @@
   }
 
   function generateBwip(bcid, text, options) {
-    const rawResult = bwipjs.raw(bcid, text, options);
-    const data = rawResult[0];
+    const canvas = document.createElement('canvas');
+    bwipjs.toCanvas(canvas, { bcid, text, scale: 1, includetext: false, padding: 0, ...options });
+    const ctx = canvas.getContext('2d');
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const grid = [];
-    for (let r = 0; r < data.pixy; r++) {
+    for (let r = 0; r < canvas.height; r++) {
       grid[r] = [];
-      for (let c = 0; c < data.pixx; c++) {
-        grid[r][c] = data.pixs[r * data.pixx + c] === 1;
+      for (let c = 0; c < canvas.width; c++) {
+        grid[r][c] = img.data[(r * canvas.width + c) * 4 + 3] > 127;
       }
     }
-    return { grid, rows: data.pixy, cols: data.pixx };
+    return { grid, rows: canvas.height, cols: canvas.width };
   }
 
   function verifyScan(grid, totalSize) {
