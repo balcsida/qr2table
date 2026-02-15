@@ -1,5 +1,3 @@
-[screen-capture (10).webm](https://github.com/user-attachments/assets/c1a8cdd7-6fc3-4681-9f7c-8628ff7618e6)
-
 # qr2table
 
 Generate email-safe QR codes as pure HTML tables with colspan/rowspan optimization and experimental lossy compression.
