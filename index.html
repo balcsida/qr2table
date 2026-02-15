@@ -391,10 +391,26 @@
       <div class="panel">
         <div class="panel-title">Content</div>
         <div class="field">
+          <label>Barcode type</label>
+          <select id="barcode-type">
+            <optgroup label="2D Barcodes">
+              <option value="qrcode" selected>QR Code</option>
+              <option value="azteccode">Aztec Code</option>
+              <option value="datamatrix">Data Matrix</option>
+            </optgroup>
+            <optgroup label="1D Barcodes">
+              <option value="code128">Code 128</option>
+              <option value="code39">Code 39</option>
+              <option value="ean13">EAN-13</option>
+              <option value="upca">UPC-A</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="field">
           <label for="qr-input">Text or URL</label>
           <textarea id="qr-input" placeholder="https://example.com" spellcheck="false">https://example.com</textarea>
         </div>
-        <div class="field">
+        <div class="field" id="ec-field">
           <label>Error correction</label>
           <select id="ec-level">
             <option value="L">Low (7%) — smaller QR</option>
@@ -489,7 +505,19 @@
 <div class="toast" id="toast">Copied to clipboard!</div>
 
 <script>
+  const BARCODE_TYPES = {
+    qrcode:     { lib: 'qr',   type: '2d', hasEC: true,  hasLossy: true  },
+    azteccode:  { lib: 'bwip', type: '2d', hasEC: true,  hasLossy: false },
+    datamatrix: { lib: 'bwip', type: '2d', hasEC: false, hasLossy: false },
+    code128:    { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
+    code39:     { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
+    ean13:      { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
+    upca:       { lib: 'bwip', type: '1d', hasEC: false, hasLossy: false },
+  };
+
+  const barcodeTypeEl = document.getElementById('barcode-type');
   const inputEl = document.getElementById('qr-input');
+  const ecFieldEl = document.getElementById('ec-field');
   const ecEl = document.getElementById('ec-level');
   const fgEl = document.getElementById('fg-color');
   const bgEl = document.getElementById('bg-color');
@@ -935,6 +963,17 @@
   fgEl.addEventListener('input', () => { fgHex.textContent = fgEl.value; generate(); });
   bgEl.addEventListener('input', () => { bgHex.textContent = bgEl.value; generate(); });
   cellSizeEl.addEventListener('input', () => { cellSizeVal.textContent = cellSizeEl.value + 'px'; generate(); });
+
+  const lossyPanelEl = lossyEnabledEl.closest('.panel');
+
+  function updateUIForBarcodeType() {
+    const cfg = BARCODE_TYPES[barcodeTypeEl.value];
+    ecFieldEl.style.display = cfg.hasEC ? '' : 'none';
+    lossyPanelEl.style.display = cfg.hasLossy ? '' : 'none';
+    generate();
+  }
+
+  barcodeTypeEl.addEventListener('change', updateUIForBarcodeType);
 
   let debounce;
   inputEl.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(generate, 200); });
