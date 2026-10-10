@@ -19,7 +19,8 @@ qr2table generates QR codes built entirely from `<td>` cells with inline styles,
 - **Pure HTML table output** — works in every email client that supports basic HTML tables
 - **Maximal-area rectangle packing** — merges contiguous same-color regions using `colspan` and `rowspan`, typically reducing cell count by 80%+
 - **HTML minification** — background color inheritance from the `<table>` element, shortened hex colors (`#000000` → `#000`), stripped redundant inline properties
-- **Lossy compression** *(experimental)* — strategically flips isolated data modules to create larger mergeable regions, using the QR error correction headroom as a budget. Finder patterns, alignment patterns, timing, format and version info are fully protected
+- **Mask selection** — QR decoders accept all 8 data masks, so the one that packs into the shortest table is used (lossless)
+- **Lossy compression** *(experimental)* — for QR, sacrifices whole Reed-Solomon codewords up to the error correction capacity of each block and smooths them into larger mergeable regions. Finder patterns, alignment patterns, timing, format and version info are fully protected
 - **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor
 - **Configurable** — foreground/background colors, cell size, error correction level, quiet zone toggle
 
@@ -41,11 +42,11 @@ This exploits the large uniform regions in QR codes (quiet zone, finder patterns
 QR codes include error correction (7%–30% of data, depending on level). qr2table can optionally spend some of that headroom to improve table compression:
 
 1. Build a **protection mask** over all functional patterns (finders, timing, alignment, format/version info)
-2. Score each unprotected data module by **neighbor isolation** — how many of its 4 neighbors have a different color
-3. Sort by score and **flip** the most isolated modules first (lone islands that fragment the grid)
-4. Stop at a configurable fraction of the EC budget (with a 50% safety margin)
+2. Map every **codeword** (8 modules) to its Reed-Solomon block — any number of wrong bits inside one codeword costs exactly one unit of that block's capacity
+3. Score each codeword by how much **smoothing** it would remove color boundaries, and pick the best ones per block, up to the block's capacity × the slider fraction (100% = all of it)
+4. Smooth the picked codewords (and the unused remainder bits) toward their neighbors' majority color
 
-The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. The trade-off is that you're consuming error correction capacity, so always verify the output with a QR scanner.
+The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. The mask is chosen after this step, and every QR is re-decoded with jsQR. At 100% the code only scans in clean conditions, so always verify the output with a QR scanner. Other barcode types still flip isolated modules.
 
 ## Usage
 
