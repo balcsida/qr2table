@@ -886,7 +886,7 @@
 
     const free = remainder.slice();
     for (const block of blocks)
-      for (const cw of block.sort((a, b) => b.gain - a.gain).slice(0, sacrifice)) free.push(...cw.mods);
+      for (const cw of block.filter(cw => cw.gain > 0).sort((a, b) => b.gain - a.gain).slice(0, sacrifice)) free.push(...cw.mods);
     const original = free.map(([r, c]) => grid[r][c]);
     smooth(free);
     return free.filter(([r, c], i) => grid[r][c] !== original[i]).length;

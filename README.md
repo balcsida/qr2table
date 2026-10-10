@@ -46,7 +46,7 @@ QR codes include error correction (7%–30% of data, depending on level). qr2tab
 3. Score each codeword by how much **smoothing** it would remove color boundaries, and pick the best ones per block, up to the block's capacity × the slider fraction (100% = all of it)
 4. Smooth the picked codewords (and the unused remainder bits) toward their neighbors' majority color
 
-The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. The mask is chosen after this step, and every QR is re-decoded with jsQR. At 100% the code only scans in clean conditions, so always verify the output with a QR scanner. Other barcode types still flip isolated modules.
+The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. Each of the 8 data masks is tried with this step applied and the shortest table wins, then the result is re-decoded with jsQR. At 100% the code only scans in clean conditions, so always verify the output with a QR scanner. Other barcode types still flip isolated modules.
 
 ## Usage
 
