@@ -548,6 +548,7 @@
 
   let currentHTML = '';
   let currentTableHTML = '';
+  let lastVerify = {};
 
   // QR alignment pattern center positions by version
   const ALIGN_POS = [
@@ -1141,7 +1142,7 @@
       const protect = bcid === 'qrcode' ? buildProtectionMask(moduleRows, pad, totalRows) : buildQuietZoneMask(pad, totalRows, totalCols);
 
       // Apply lossy compression (on a copy of the grid) and build the table
-      function compress(g) {
+      function compress(g, m) {
         let modulesFlipped = 0;
         if (cfg.hasLossy && lossyEnabledEl.checked) {
           const budget = parseInt(lossyBudgetEl.value) / 100;
@@ -1165,13 +1166,13 @@
             }
           }
         }
-        return { g, modulesFlipped, ...buildTableHTML(g, totalRows, totalCols, cs, fgShort, bgShort) };
+        return { g, m, modulesFlipped, ...buildTableHTML(g, totalRows, totalCols, cs, fgShort, bgShort) };
       }
 
       // QR: try all 8 data masks and keep the one whose table HTML is shortest
       let best;
       for (const m of bcid === 'qrcode' ? [0, 1, 2, 3, 4, 5, 6, 7] : [-1]) {
-        const cand = compress(m < 0 ? grid.map(row => row.slice()) : remaskQR(grid, pad, protect, m));
+        const cand = compress(m < 0 ? grid.map(row => row.slice()) : remaskQR(grid, pad, protect, m), m);
         if (!best || cand.tableHTML.length < best.tableHTML.length) best = cand;
       }
       const { tableHTML, cellCount, modulesFlipped } = best;
@@ -1191,7 +1192,10 @@
       const reduction = ((1 - cellCount / totalCells) * 100).toFixed(0);
       statsEl.innerHTML = `<span>${totalRows}×${totalCols}</span> grid · <span>${cellCount}</span> / ${totalCells} cells (<span>-${reduction}%</span>) · <span>${htmlSize} KB</span>`;
       if (bcid === 'qrcode') {
-        statsEl.innerHTML += verifyScan(grid, totalRows) !== null
+        // jsQR is the slow step; colours and cell size don't change the grid, so only re-verify when its inputs change
+        const key = [text, ecLevel, pad, lossyEnabledEl.checked && lossyBudgetEl.value, best.m].join('\0');
+        if (key !== lastVerify.key) lastVerify = { key, ok: verifyScan(grid, totalRows) !== null };
+        statsEl.innerHTML += lastVerify.ok
           ? ` · <span style="color:var(--success)">✓ Scan verified</span>`
           : ` · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
       }
