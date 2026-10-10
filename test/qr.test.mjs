@@ -9,8 +9,11 @@ const cdn = [...html.matchAll(/<script src="([^"]*(?:qrcode-generator|jsqr)[^"]*
 assert.equal(cdn.length, 2);
 const el = { value: '', checked: false, style: {}, innerHTML: '', textContent: '', placeholder: '', addEventListener() {}, getContext() { return {}; } };
 const ctx = vm.createContext({ document: { getElementById: () => el, createElement: () => el }, console });
-for (const src of [...(await Promise.all(cdn.map(u => fetch(u.startsWith('//') ? 'https:' + u : u).then(r => r.text())))), page])
-  vm.runInContext(src, ctx);
+const libs = await Promise.all(cdn.map(u => fetch(u.startsWith('//') ? 'https:' + u : u).then(r => r.text())));
+for (const src of [...libs, page]) vm.runInContext(src, ctx);
+// qrcode-generator's RS_BLOCK_TABLE: [count, totalCount, dataCount(, count2, totalCount2, dataCount2)] × (L,M,Q,H) × 40 versions
+const RS = JSON.parse(libs[0].match(/\[\[1,26,19\](?:,\[[\d,]+\])*\]/)[0]);
+assert.equal(RS.length, 160);
 const { qrcode, jsQR, buildProtectionMask, remaskQR, qrCodewordMap, applyQRLossy, buildTableHTML } = ctx;
 const QR_BLOCKS = vm.runInContext('QR_BLOCKS', ctx); // top-level const: visible to scripts, not a context property
 
@@ -37,7 +40,11 @@ for (let v = 1; v <= 40; v++) {
   assert.equal(free, 8 * TOTAL[v - 1] + remBits(v), `v${v} non-function modules`);
   const { codewords } = qrCodewordMap(g, PAD, buildProtectionMask(n, PAD, g.length));
   assert.equal(codewords.length, TOTAL[v - 1]);
-  for (const [ec, nb] of QR_BLOCKS[v - 1]) assert.ok(nb * ec < TOTAL[v - 1]);
+  QR_BLOCKS[v - 1].forEach(([ec, nb], l) => {
+    const e = RS[(v - 1) * 4 + l];
+    assert.equal(ec, e[1] - e[2], `v${v} ${'LMQH'[l]} ec per block`);
+    assert.equal(nb, e[0] + (e[3] || 0), `v${v} ${'LMQH'[l]} blocks`);
+  });
 }
 
 const INPUTS = ['https://example.com', 'https://example.com/path/to/some/page?utm_source=newsletter&utm_campaign=spring&id=12345',
@@ -82,21 +89,22 @@ for (const text of INPUTS) for (const [l, L] of [...LEVELS].entries()) {
 
 // D/E. lossy output stays scannable and smaller; benchmark
 const bytes = g => buildTableHTML(g, g.length, g.length, 4, '#000', '#fff');
-const pipeline = (g, budget, level) => { // best of 8 masks, lossy applied per candidate like generate()
+const pipeline = (g, budget, level, text) => { // best of 8 masks, lossy applied per candidate like generate()
   const protect = buildProtectionMask(g.length - 2 * PAD, PAD, g.length);
   let best;
   for (let m = 0; m < 8; m++) {
     const h = remaskQR(g, PAD, protect, m);
     if (budget) applyQRLossy(h, PAD, protect, level, budget);
     const t = bytes(h);
-    if (!best || t.tableHTML.length < best.len) best = { len: t.tableHTML.length, cells: t.cellCount, ok: decode(h) !== null };
+    if (!best || t.tableHTML.length < best.len) best = { len: t.tableHTML.length, cells: t.cellCount, ok: decode(h) === text };
   }
   return best;
 };
 const rows = [];
 for (const [i, text] of INPUTS.entries()) for (const L of LEVELS) {
   const g = make(text, L), t = bytes(g);
-  const cols = [pipeline(g, 0, L), pipeline(g, 0.2, L), pipeline(g, 1, L)];
+  const cols = [pipeline(g, 0, L, text), pipeline(g, 0.2, L, text), pipeline(g, 1, L, text)];
+  assert.ok(cols[0].len <= t.tableHTML.length, `mask selection never worse ${L}`);
   const h = copy(g); applyQRLossy(h, PAD, buildProtectionMask(g.length - 2 * PAD, PAD, g.length), L, 1);
   assert.equal(decode(h), text, `lossy 100% ${L}`);
   assert.ok(bytes(h).tableHTML.length < t.tableHTML.length, `lossy 100% smaller ${L}`);
