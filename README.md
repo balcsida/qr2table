@@ -21,6 +21,7 @@ qr2table generates QR codes built entirely from `<td>` cells with inline styles,
 - **Byte-aware rectangle packing** — merges contiguous same-color regions using `colspan` and `rowspan` wherever that makes the HTML shorter
 - **HTML minification** — background color inheritance from the `<table>` element, shortened hex colors (`#000000` → `#000`), unquoted attribute values, no `</td>` or `</tr>`
 - **Mask selection** — QR decoders accept all 8 data masks, so the one that packs into the shortest table is used (lossless)
+- **Compact QR modes** — all-digit text is encoded in numeric mode, and text made of digits, capitals, spaces and `$%*+-./:` in alphanumeric mode. At levels L and M, `HTTPS://EXAMPLE.COM` fits a 21×21 code where `https://example.com` needs 25×25
 - **Lossy compression** *(experimental)* — for QR, sacrifices whole Reed-Solomon codewords up to the error correction capacity of each block and smooths them into larger mergeable regions. Finder patterns, alignment patterns, timing, format and version info are fully protected
 - **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor. The copy ends with a line break, because WebKit drops the last cell of a pasted table when nothing follows it
 - **Teams CLI command** — "Copy Teams command" emits a ready-to-run `teams message send` command carrying a table built for Teams, because Teams strips cell styling from anything pasted into its compose box

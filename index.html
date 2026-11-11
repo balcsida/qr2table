@@ -1089,6 +1089,11 @@
     return result ? result.data : null;
   }
 
+  // The smallest mode the text fits: a digit takes 3⅓ bits and one of the 45 alphanumeric characters 5½, against 8 for a byte.
+  function qrMode(text) {
+    return /^\d+$/.test(text) ? 'Numeric' : /^[0-9A-Z $%*+\-./:]+$/.test(text) ? 'Alphanumeric' : 'Byte';
+  }
+
   function generate() {
     const text = inputEl.value.trim();
     if (!text) {
@@ -1111,7 +1116,7 @@
 
       if (cfg.lib === 'qr') {
         const qr = qrcode(0, ecLevel);
-        qr.addData(text);
+        qr.addData(text, qrMode(text));
         qr.make();
         const moduleCount = qr.getModuleCount();
         moduleRows = moduleCount;

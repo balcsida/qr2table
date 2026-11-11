@@ -263,4 +263,14 @@ ctx.bwipjs = { toCanvas(canvas) {
 } };
 const other = { 'barcode-type': 'datamatrix', 'qr-input': 'x', 'quiet-zone': false };
 assert.ok(run({ ...other, 'lossy-enabled': true }).html.length <= run(other).html.length, 'lossy never makes another code\'s table longer');
+
+// K. text made of digits, or of the 45 alphanumeric characters, is encoded in the smaller mode
+for (const [text, mode] of [['0123456789', 'Numeric'], ['HTTPS://EXAMPLE.COM/A-B.C', 'Alphanumeric'], ['$%*+-./: 09AZ', 'Alphanumeric'], ['https://example.com', 'Byte'], ['A?B', 'Byte'], ['A\nB', 'Byte'], ['１２３', 'Byte']])
+  assert.equal(ctx.qrMode(text), mode, `mode of ${JSON.stringify(text)}`);
+// At level M, 19 alphanumeric characters or 30 digits fit version 1 (21 modules); 19 bytes need version 2 (25)
+for (const [text, modules] of [['HTTPS://EXAMPLE.COM', 21], ['012345678901234567890123456789', 21], ['https://example.com', 25]]) {
+  const { html, stats } = run({ 'qr-input': text, 'quiet-zone': false });
+  assert.ok(stats.includes(`<span>${modules}×${modules}</span> grid`), `${text} takes ${modules} modules: ${stats}`);
+  assert.equal(decode(emailTable(html).grid), text, `${text} decodes`);
+}
 console.log('ok');
