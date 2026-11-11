@@ -31,14 +31,16 @@ for (const src of [...libs, page]) vm.runInContext(src, ctx);
 // qrcode-generator's RS_BLOCK_TABLE: [count, totalCount, dataCount(, count2, totalCount2, dataCount2)] × (L,M,Q,H) × 40 versions
 const RS = JSON.parse(libs[0].match(/\[\[1,26,19\](?:,\[[\d,]+\])*\]/)[0]);
 assert.equal(RS.length, 160);
-const { qrcode, jsQR, buildProtectionMask, remaskQR, qrCodewordMap, applyQRLossy, buildTableHTML, buildTeamsHTML, copyRich } = ctx;
+const { qrcode, jsQR, buildProtectionMask, remaskQR, qrCodewordMap, applyQRLossy, shapeQRPadding, rsEncode, buildTableHTML, buildTeamsHTML, copyRich } = ctx;
 const QR_BLOCKS = vm.runInContext('QR_BLOCKS', ctx); // top-level const: visible to scripts, not a context property
 
 const TOTAL = [26,44,70,100,134,172,196,242,292,346,404,466,532,581,655,733,815,901,991,1085,1156,1258,1364,1474,1588,1706,1828,1921,2051,2185,2323,2465,2611,2761,2876,3034,3196,3362,3532,3706];
 const remBits = v => v == 1 ? 0 : v <= 6 ? 7 : v <= 13 ? 0 : v <= 20 ? 3 : v <= 27 ? 4 : v <= 34 ? 3 : 0;
 const PAD = 4;
-const make = (text, level, version = 0) => {
-  const qr = qrcode(version, level); qr.addData(text); qr.make();
+const make = (text, level, version = 0, mode) => {
+  const qr = qrcode(version, level);
+  for (const segment of [text].flat()) qr.addData(segment, mode);
+  qr.make();
   const n = qr.getModuleCount(), t = n + PAD * 2;
   return Array.from({ length: t }, (_, r) => Array.from({ length: t }, (_, c) => r >= PAD && c >= PAD && r < t - PAD && c < t - PAD && qr.isDark(r - PAD, c - PAD)));
 };
@@ -85,33 +87,40 @@ for (const text of INPUTS) for (const L of LEVELS) {
 const pbits = (v, l) => v == 1 ? [3, 2, 1, 1][l] : v == 2 && l == 0 ? 2 : v == 3 && l == 0 ? 1 : 0;
 const copy = g => g.map(r => r.slice());
 
-// C. block mapping: `capacity` bad codewords per block decode, capacity+1 in one block does not
-for (const text of INPUTS) for (const [l, L] of [...LEVELS].entries()) {
-  const g = make(text, L), n = g.length - 2 * PAD, v = (n - 17) / 4, protect = buildProtectionMask(n, PAD, g.length);
-  const { codewords } = qrCodewordMap(g, PAD, protect), [ec, nb] = QR_BLOCKS[v - 1][l];
-  // Independent layout: build each block, then interleave data columns followed by EC columns
-  const data = codewords.length - nb * ec, lens = Array.from({ length: nb }, (_, b) => Math.floor(data / nb) + (b >= nb - data % nb ? 1 : 0));
+// Independent block layout: build each block, then interleave data columns followed by EC columns.
+// blocks[b] lists the codeword indices of block b, its lens[b] data codewords first.
+const blockLayout = (total, v, l) => {
+  const [ec, nb] = QR_BLOCKS[v - 1][l];
+  const data = total - nb * ec, lens = Array.from({ length: nb }, (_, b) => Math.floor(data / nb) + (b >= nb - data % nb ? 1 : 0));
   const blocks = lens.map(() => []);
   let k = 0;
   for (let i = 0; i < Math.max(...lens); i++) for (let b = 0; b < nb; b++) if (i < lens[b]) blocks[b].push(k++);
   for (let i = 0; i < ec; i++) for (let b = 0; b < nb; b++) blocks[b].push(k++);
-  assert.equal(k, codewords.length);
-  const cap = Math.floor((ec - pbits(v, l)) / 2);
-  const spread = (b, count) => Array.from({ length: count }, (_, i) => blocks[b][Math.floor(i * blocks[b].length / count)]);
-  const hit = ks => { const h = copy(g); for (const q of ks) for (const [r, c] of codewords[q]) h[r][c] = !h[r][c]; return h; };
-  assert.equal(decode(hit(blocks.flatMap((_, b) => spread(b, cap)))), text, `${L} v${v} capacity`);
+  assert.equal(k, total);
+  return { blocks, lens, ec, nb, cap: Math.floor((ec - pbits(v, l)) / 2) };
+};
+const spread = (ks, count) => Array.from({ length: count }, (_, i) => ks[Math.floor(i * ks.length / count)]);
+// g with the given codewords inverted
+const hit = (g, codewords, ks) => { const h = copy(g); for (const q of ks) for (const [r, c] of codewords[q]) h[r][c] = !h[r][c]; return h; };
+
+// C. block mapping: `capacity` bad codewords per block decode, capacity+1 in one block does not
+for (const text of INPUTS) for (const [l, L] of LEVELS.entries()) {
+  const g = make(text, L), n = g.length - 2 * PAD, v = (n - 17) / 4, protect = buildProtectionMask(n, PAD, g.length);
+  const { codewords } = qrCodewordMap(g, PAD, protect), { blocks, ec, nb, cap } = blockLayout(codewords.length, v, l);
+  assert.equal(decode(hit(g, codewords, blocks.flatMap(ks => spread(ks, cap)))), text, `${L} v${v} capacity`);
   // jsQR has no misdecode guard, so it still fixes cap+1 when 2*(cap+1) <= ec
-  if (2 * (cap + 1) > ec) assert.notEqual(decode(hit(spread(nb - 1, cap + 1))), text, `${L} v${v} capacity+1`);
+  if (2 * (cap + 1) > ec) assert.notEqual(decode(hit(g, codewords, spread(blocks[nb - 1], cap + 1))), text, `${L} v${v} capacity+1`);
 }
 
 // D/E. lossy output stays scannable and smaller; benchmark
 const CS = 4;
 const bytes = g => buildTableHTML(g, CS, '#000', '#fff');
-const pipeline = (g, budget, level, text) => { // best of 8 masks, lossy applied per candidate like generate()
+const pipeline = (g, budget, level, text) => { // best of 8 masks, pad codewords shaped and lossy applied per candidate like generate()
   const protect = buildProtectionMask(g.length - 2 * PAD, PAD, g.length);
   let best;
   for (let m = 0; m < 8; m++) {
     const h = remaskQR(g, PAD, protect, m);
+    shapeQRPadding(h, PAD, protect, level, m);
     if (budget) applyQRLossy(h, PAD, protect, level, budget);
     const t = bytes(h);
     if (!best || t.tableHTML.length < best.len) best = { len: t.tableHTML.length, cells: t.cellCount, ok: decode(h) === text };
@@ -130,11 +139,11 @@ for (const [i, text] of INPUTS.entries()) for (const L of LEVELS) {
   for (const c of cols) assert.ok(c.ok, `pipeline decodes ${L}`);
   total += cols[0].len;
   const f = c => `${String(c.len).padStart(6)}B/${String(c.cells).padStart(4)}c ${c.ok ? 'ok' : 'FAIL'}`;
-  rows.push(`in#${i} ${L} v${(g.length - 2 * PAD - 17) / 4}`.padEnd(12) + `| orig ${String(t.tableHTML.length).padStart(6)}B/${String(t.cellCount).padStart(4)}c ok | mask ${f(cols[0])} | +20% ${f(cols[1])} | +100% ${f(cols[2])}`);
+  rows.push(`in#${i} ${L} v${(g.length - 2 * PAD - 17) / 4}`.padEnd(12) + `| orig ${String(t.tableHTML.length).padStart(6)}B/${String(t.cellCount).padStart(4)}c ok | lossless ${f(cols[0])} | +20% ${f(cols[1])} | +100% ${f(cols[2])}`);
 }
 console.log(rows.join('\n'));
 // The same 12 symbols took 958,677 bytes while every cell carried its own width, height and padding
-assert.ok(total < 316e3, `lossless tables of the 12 symbols total ${total} bytes`);
+assert.ok(total < 307e3, `lossless tables of the 12 symbols total ${total} bytes`);
 
 // The cells of each <tr> as attribute strings; end tags are optional
 const cellRows = html => [...html.matchAll(/<tr>(.*?)(?=<tr>|<\/table>)/g)].map(([, row]) => [...row.matchAll(/<td([^>]*)>/g)].map(([, attrs]) => attrs));
@@ -272,5 +281,84 @@ for (const [text, modules] of [['HTTPS://EXAMPLE.COM', 21], ['012345678901234567
   const { html, stats } = run({ 'qr-input': text, 'quiet-zone': false });
   assert.ok(stats.includes(`<span>${modules}×${modules}</span> grid`), `${text} takes ${modules} modules: ${stats}`);
   assert.equal(decode(emailTable(html).grid), text, `${text} decodes`);
+}
+
+// L. the pad codewords after the terminator carry nothing: they are filled with light modules and the error correction
+//    of their blocks is recomputed, which keeps every data bit and the full correction capacity.
+// Codeword values of a symbol, read through mask 0 (a checkerboard)
+const codewordBytes = (g, protect, codewords) => {
+  const checkered = remaskQR(g, PAD, protect, 0);
+  return codewords.map(mods => mods.reduce((value, [r, c]) => value << 1 | (checkered[r][c] !== ((r + c) % 2 === 0)), 0));
+};
+const dataCodewords = (v, l) => TOTAL[v - 1] - QR_BLOCKS[v - 1][l][0] * QR_BLOCKS[v - 1][l][1];
+// rsEncode() agrees with the encoder of qrcode-generator on every block of every version and level, each nearly full of varied bytes
+const varied = Array.from({ length: 3000 }, () => String.fromCharCode(32 + Math.floor(random() * 95))).join('');
+for (let v = 1; v <= 40; v++) for (const [l, L] of LEVELS.entries()) {
+  const g = make(varied.slice(0, dataCodewords(v, l) - 3), L, v), protect = buildProtectionMask(g.length - 2 * PAD, PAD, g.length), { codewords } = qrCodewordMap(g, PAD, protect);
+  const values = codewordBytes(g, protect, codewords), { blocks, lens, ec } = blockLayout(codewords.length, v, l);
+  blocks.forEach((ks, b) => assert.deepEqual([...rsEncode(ks.slice(0, lens[b]).map(k => values[k]), ec)], ks.slice(lens[b]).map(k => values[k]), `Reed-Solomon v${v} ${L} block ${b}`));
+}
+// How many data codewords come before the pads: the mode (4 bits), the character count, the characters and a 4-bit
+// terminator, rounded up to whole codewords. The count takes 10/12/14 bits for digits, 9/11/13 for alphanumeric and
+// 8/16/16 for bytes, in versions 1-9/10-26/27-40. Three digits take 10 bits (one 4, two 7), two characters 11 (one 6).
+const SHAPED = [
+  ...INPUTS.map(text => [text, 'Byte', v => text.length + (v < 10 ? 2 : 3)]),
+  ['a'.repeat(1400), 'Byte', 1403, ['L']],                          // version 27: 4 + 16 + 11200 + 4 bits
+  ['42', 'Numeric', 4],                                             // 4 + 10 + 7 + 4 = 25 bits
+  ['2024', 'Numeric', 4],                                           // 4 + 10 + 10 + 4 + 4 = 32
+  ['123456789', 'Numeric', 6],                                      // 4 + 10 + 30 + 4 = 48
+  ['012345678901234567890123456789', 'Numeric', 15],                // 4 + 10 + 100 + 4 = 118
+  ['7'.repeat(700), 'Numeric', 295, ['L']],                         // version 11: 4 + 12 + 2330 + 4 + 4 = 2354
+  ['7'.repeat(3300), 'Numeric', 1378, ['L']],                       // version 27: 4 + 14 + 11000 + 4 = 11022
+  ['ABCDEFGHIJ', 'Alphanumeric', 9],                                // 4 + 9 + 55 + 4 = 72
+  ['HELLO WORLD 1', 'Alphanumeric', 12],                            // 4 + 9 + 66 + 6 + 4 = 89
+  ['HTTPS://EXAMPLE.COM', 'Alphanumeric', 16],                      // 4 + 9 + 99 + 6 + 4 = 122
+  ['A'.repeat(400), 'Alphanumeric', 278, ['L']],                    // version 11: 4 + 11 + 2200 + 4 = 2219
+  ['A'.repeat(2000), 'Alphanumeric', 1378, ['L']],                  // version 27: 4 + 13 + 11000 + 4 = 11021
+  // either side of the two version boundaries where the count grows (all three modes switch at the same versions)
+  ['a', 'Byte', 3, ['L'], 9], ['a', 'Byte', 4, ['L'], 10],          // 4 + 8 + 8 + 4 = 24 bits, then 4 + 16 + 8 + 4 = 32
+  ['7', 'Numeric', 3, ['L'], 26], ['7', 'Numeric', 4, ['L'], 27],   // 4 + 12 + 4 + 4 = 24 bits, then 4 + 14 + 4 + 4 = 26
+  // version 1-L holds 19 codewords, 152 bits: no pads when the terminator ends exactly there, or does not fit at all
+  ['a'.repeat(17), 'Byte', 19, ['L']],                              // 4 + 8 + 136 + 4 = 152
+  ['1234567890'.repeat(4) + '1', 'Numeric', 19, ['L']],             // 4 + 10 + 130 + 7 = 151, one bit short of a terminator
+];
+for (const [text, mode, used, levels = LEVELS, version = 0] of SHAPED) for (const L of levels) {
+  const l = LEVELS.indexOf(L), g = make(text, L, version, mode), n = g.length - 2 * PAD, v = (n - 17) / 4, protect = buildProtectionMask(n, PAD, g.length);
+  const { codewords } = qrCodewordMap(g, PAD, protect), { blocks, lens, ec, cap } = blockLayout(codewords.length, v, l);
+  const stream = blocks.flatMap((ks, b) => ks.slice(0, lens[b])), kept = stream.slice(0, typeof used === 'number' ? used : used(v));
+  const pads = dataCodewords(v, l) - kept.length, before = codewordBytes(g, protect, codewords);
+  for (const m of levels === LEVELS ? [1, 6] : [4]) {
+    const masked = remaskQR(g, PAD, protect, m), h = copy(masked), label = `${mode} ${text.length} ${L} v${v} mask ${m}`;
+    assert.equal(shapeQRPadding(h, PAD, protect, L, m), pads, `pad codewords ${label}`);
+    const after = codewordBytes(h, protect, codewords);
+    assert.deepEqual(kept.map(k => after[k]), kept.map(k => before[k]), `data codewords are kept ${label}`);
+    blocks.forEach((ks, b) => assert.deepEqual([...rsEncode(ks.slice(0, lens[b]).map(k => after[k]), ec)], ks.slice(lens[b]).map(k => after[k]), `error correction is exact ${label} block ${b}`));
+    for (const k of stream.slice(kept.length)) assert.ok(codewords[k].every(([r, c]) => !h[r][c]), `pad modules are light ${label}`);
+    assert.ok(h.every((row, r) => row.every((dark, c) => !protect[r][c] || dark === masked[r][c])), `function patterns are kept ${label}`);
+    if (pads === 0) assert.ok(same(h, masked), `nothing to shape, nothing changes ${label}`);
+    assert.equal(decode(h), text, `shaped symbol decodes ${label}`);
+    assert.equal(decode(hit(h, codewords, blocks.flatMap(ks => spread(ks, cap)))), text, `shaped symbol keeps its capacity ${label}`);
+  }
+}
+// A second segment where the terminator would be: nothing is free and nothing is touched
+const twoSegments = make(['AB', 'CD'], 'M'), twoProtect = buildProtectionMask(twoSegments.length - 2 * PAD, PAD, twoSegments.length);
+const twoMasked = remaskQR(twoSegments, PAD, twoProtect, 2), twoShaped = copy(twoMasked);
+assert.equal(shapeQRPadding(twoShaped, PAD, twoProtect, 'M', 2), 0, 'no pad codewords are claimed after the first of two segments');
+assert.ok(same(twoShaped, twoMasked) && decode(twoShaped) === 'ABCD', 'a symbol of two segments is left alone');
+// generate() shapes: the default URL at level L has 13 pad codewords and comes out below the best mask without shaping
+const roomy = make(INPUTS[0], 'L'), roomyProtect = buildProtectionMask(roomy.length - 2 * PAD, PAD, roomy.length);
+const unshaped = Math.min(...[0, 1, 2, 3, 4, 5, 6, 7].map(m => bytes(remaskQR(roomy, PAD, roomyProtect, m)).tableHTML.length));
+assert.ok(run({ 'qr-input': INPUTS[0], 'ec-level': 'L' }).html.length < unshaped, 'generate() shapes the pad codewords');
+// Without a quiet zone the same modules change
+const bare = g => g.slice(PAD, -PAD).map(row => row.slice(PAD, -PAD));
+const withZone = remaskQR(roomy, PAD, roomyProtect, 3), without = bare(withZone);
+shapeQRPadding(withZone, PAD, roomyProtect, 'L', 3);
+shapeQRPadding(without, 0, buildProtectionMask(without.length, 0, without.length), 'L', 3);
+assert.ok(same(without, bare(withZone)), 'shaping does not depend on the quiet zone');
+// The lossy step on top of the shaping, on a byte and an alphanumeric symbol
+for (const text of [INPUTS[0], 'HTTPS://EXAMPLE.COM']) {
+  const { html, stats } = run({ 'qr-input': text, 'lossy-enabled': true });
+  assert.equal(decode(emailTable(html).grid), text, `shaped and lossy table decodes: ${text}`);
+  assert.ok(stats.includes('Scan verified'), `shaped and lossy table is scan verified: ${text}`);
 }
 console.log('ok');

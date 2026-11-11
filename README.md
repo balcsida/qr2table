@@ -22,6 +22,7 @@ qr2table generates QR codes built entirely from `<td>` cells with inline styles,
 - **HTML minification** — background color inheritance from the `<table>` element, shortened hex colors (`#000000` → `#000`), unquoted attribute values, no `</td>` or `</tr>`
 - **Mask selection** — QR decoders accept all 8 data masks, so the one that packs into the shortest table is used (lossless)
 - **Compact QR modes** — all-digit text is encoded in numeric mode, and text made of digits, capitals, spaces and `$%*+-./:` in alphanumeric mode. At levels L and M, `HTTPS://EXAMPLE.COM` fits a 21×21 code where `https://example.com` needs 25×25
+- **Pad shaping** — the pad codewords that fill a QR code up after the data are set to light modules and the error correction is recomputed around them (lossless, full error correction kept)
 - **Lossy compression** *(experimental)* — for QR, sacrifices whole Reed-Solomon codewords up to the error correction capacity of each block and smooths them into larger mergeable regions. Finder patterns, alignment patterns, timing, format and version info are fully protected
 - **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor. The copy ends with a line break, because WebKit drops the last cell of a pasted table when nothing follows it
 - **Teams CLI command** — "Copy Teams command" emits a ready-to-run `teams message send` command carrying a table built for Teams, because Teams strips cell styling from anything pasted into its compose box
@@ -50,7 +51,13 @@ The remaining cells are packed greedily:
 
 Counting bytes instead of area matters because a merge is not always a win: `<td><td>` is shorter than `<td colspan=2>`. The scan runs in all 8 orientations, and each same-color region keeps the orientation that packed it into the fewest bytes.
 
-The markup itself is minified: attribute values are unquoted and `</td>` and `</tr>` are left out, both of which HTML allows. The default `https://example.com` code comes out at about 6 KB.
+The markup itself is minified: attribute values are unquoted and `</td>` and `</tr>` are left out, both of which HTML allows. The default `https://example.com` code comes out at under 6 KB.
+
+### Pad codewords
+
+A QR code is filled up to the capacity of its version with pad codewords. Decoders stop reading at the terminator in front of them, so what they hold does not matter. qr2table sets every pad module to light and recomputes the Reed-Solomon codewords of the blocks they belong to, so the code keeps its full error correction.
+
+For `https://example.com` at level L, 13 of the 34 data codewords are padding and the table gets 12% shorter. The cleared codewords show as an empty patch in the code. A code that fills its version gains nothing.
 
 ### Lossy compression
 
