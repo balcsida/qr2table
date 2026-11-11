@@ -894,111 +894,103 @@
     return free.filter(([r, c], i) => grid[r][c] !== original[i]).length;
   }
 
-  // Greedy rectangle packing: scan top-left to bottom-right, at each uncovered
-  // cell find the maximal-area same-color rectangle anchored there.
-  function packGreedy(grid, totalRows, totalCols) {
+  // Greedy rectangle packing: scan top-left to bottom-right and, at each uncovered cell, take the
+  // same-color rectangle anchored there that saves the most bytes over 1×1 cells.
+  // cost(w, h, dark) is the byte length of one cell's markup.
+  function packGreedy(grid, totalRows, totalCols, cost) {
     const used = Array.from({ length: totalRows }, () => new Uint8Array(totalCols));
-
-    function findBestRect(r, c) {
-      const val = grid[r][c];
-      let maxW = 0;
-      while (c + maxW < totalCols && grid[r][c + maxW] === val && !used[r][c + maxW]) maxW++;
-
-      let bestArea = 0, bestW = 0, bestH = 0;
-      let curW = maxW;
-
-      for (let h = 1; r + h - 1 < totalRows; h++) {
-        if (h > 1) {
-          const row = r + h - 1;
-          let newW = 0;
-          while (newW < curW && c + newW < totalCols && grid[row][c + newW] === val && !used[row][c + newW]) newW++;
-          curW = newW;
-          if (curW === 0) break;
-        }
-        const area = curW * h;
-        if (area > bestArea) { bestArea = area; bestW = curW; bestH = h; }
-      }
-      return { w: bestW, h: bestH };
-    }
-
-    const spans = [];
-    for (let r = 0; r < totalRows; r++) spans[r] = new Array(totalCols).fill(null);
-
-    let cellCount = 0;
-    for (let r = 0; r < totalRows; r++) {
+    const rects = [];
+    for (let r = 0; r < totalRows; r++)
       for (let c = 0; c < totalCols; c++) {
         if (used[r][c]) continue;
-        const { w, h } = findBestRect(r, c);
-        spans[r][c] = { w, h, dark: grid[r][c] };
-        for (let dr = 0; dr < h; dr++)
-          for (let dc = 0; dc < w; dc++)
-            used[r + dr][c + dc] = 1;
-        cellCount++;
+        const dark = grid[r][c], unit = cost(1, 1, dark);
+        let bestW = 1, bestH = 1, bestSave = 0, curW = totalCols - c;
+        for (let h = 1; r + h <= totalRows; h++) {
+          const row = r + h - 1;
+          let w = 0;
+          while (w < curW && grid[row][c + w] === dark && !used[row][c + w]) w++;
+          if (w === 0) break;
+          curW = w;
+          // At a given height the widest rectangle saves the most, unless a single column (no colspan) does
+          for (const tryW of [curW, 1]) {
+            const save = unit * tryW * h - cost(tryW, h, dark);
+            if (save > bestSave) { bestSave = save; bestW = tryW; bestH = h; }
+          }
+        }
+        rects.push({ r, c, w: bestW, h: bestH, dark });
+        for (let dr = 0; dr < bestH; dr++) used[r + dr].fill(1, c, c + bestW);
       }
-    }
-
-    return { spans, cellCount };
+    return rects;
   }
 
-  // Try all 8 orientations of the dihedral group D4 (4 reflections × identity/transpose)
-  // and return the packing with the fewest cells. Different scan orders cause the greedy
-  // algorithm to make different rectangle choices; picking the best eliminates scan-order bias.
-  function packBestOrientation(grid, totalRows, totalCols) {
+  // The greedy depends on scan order, so it runs in all 8 orientations of the dihedral group D4
+  // (4 reflections × identity/transpose). Same-color regions tile independently of each other,
+  // so each region keeps the orientation that packs it into the fewest bytes.
+  function packBest(grid, totalRows, totalCols, cost) {
     const R = totalRows, C = totalCols;
 
-    // Identity (original scan order) — no grid copy or span transform needed
-    let best = packGreedy(grid, R, C);
+    // Label the 4-connected same-color regions
+    const region = Array.from({ length: R }, () => new Int32Array(C).fill(-1));
+    let regions = 0;
+    for (let r = 0; r < R; r++)
+      for (let c = 0; c < C; c++) {
+        if (region[r][c] >= 0) continue;
+        const stack = [[r, c]];
+        region[r][c] = regions;
+        while (stack.length) {
+          const [y, x] = stack.pop();
+          for (const [ny, nx] of [[y - 1, x], [y + 1, x], [y, x - 1], [y, x + 1]])
+            if (ny >= 0 && ny < R && nx >= 0 && nx < C && region[ny][nx] < 0 && grid[ny][nx] === grid[r][c]) {
+              region[ny][nx] = regions;
+              stack.push([ny, nx]);
+            }
+        }
+        regions++;
+      }
 
-    // Remaining 7 orientations: [transpose, flipH, flipV]
-    const orientations = [
-      [false, true,  false],
-      [false, false, true],
-      [false, true,  true],
-      [true,  false, false],
-      [true,  true,  false],
-      [true,  false, true],
-      [true,  true,  true],
-    ];
-
-    for (const [trans, fH, fV] of orientations) {
+    const best = new Array(regions), bestCost = new Array(regions).fill(Infinity);
+    for (let o = 0; o < 8; o++) {
+      const trans = o & 4, fH = o & 1, fV = o & 2;
       // Transposing swaps rows and cols
       const tR = trans ? C : R, tC = trans ? R : C;
-      // Build the transformed grid
-      const tGrid = Array.from({ length: tR }, (_, r) => {
-        const row = new Array(tC);
-        for (let c = 0; c < tC; c++) {
-          let srcR = trans ? c : r;
-          let srcC = trans ? r : c;
-          if (fV) srcR = R - 1 - srcR;
-          if (fH) srcC = C - 1 - srcC;
-          row[c] = grid[srcR][srcC];
-        }
-        return row;
-      });
+      const tGrid = Array.from({ length: tR }, (_, r) => Array.from({ length: tC }, (_, c) => {
+        const srcR = trans ? c : r, srcC = trans ? r : c;
+        return grid[fV ? R - 1 - srcR : srcR][fH ? C - 1 - srcC : srcC];
+      }));
 
-      const result = packGreedy(tGrid, tR, tC);
-      if (result.cellCount >= best.cellCount) continue;
-
-      // Map spans back to original coordinates
-      const newSpans = Array.from({ length: R }, () => new Array(C).fill(null));
-      for (let r = 0; r < tR; r++)
-        for (let c = 0; c < tC; c++) {
-          const s = result.spans[r][c];
-          if (!s) continue;
-          // Top-left and bottom-right corners in transformed space
-          let tlR = trans ? c : r,              tlC = trans ? r : c;
-          let brR = trans ? (c + s.w - 1) : (r + s.h - 1);
-          let brC = trans ? (r + s.h - 1) : (c + s.w - 1);
-          if (fV) { tlR = R - 1 - tlR; brR = R - 1 - brR; }
-          if (fH) { tlC = C - 1 - tlC; brC = C - 1 - brC; }
-          const minR = Math.min(tlR, brR), minC = Math.min(tlC, brC);
-          const maxR = Math.max(tlR, brR), maxC = Math.max(tlC, brC);
-          newSpans[minR][minC] = { w: maxC - minC + 1, h: maxR - minR + 1, dark: s.dark };
-        }
-      best = { spans: newSpans, cellCount: result.cellCount };
+      const rects = Array.from({ length: regions }, () => []), sum = new Array(regions).fill(0);
+      for (const t of packGreedy(tGrid, tR, tC, cost)) {
+        // Map the rectangle back to original coordinates
+        const w = trans ? t.h : t.w, h = trans ? t.w : t.h;
+        let r = trans ? t.c : t.r, c = trans ? t.r : t.c;
+        if (fV) r = R - r - h;
+        if (fH) c = C - c - w;
+        const k = region[r][c];
+        rects[k].push({ r, c, w, h, dark: t.dark });
+        sum[k] += cost(w, h, t.dark);
+      }
+      for (let k = 0; k < regions; k++)
+        if (sum[k] < bestCost[k]) { bestCost[k] = sum[k]; best[k] = rects[k]; }
     }
 
-    return best;
+    const spans = Array.from({ length: R }, () => new Array(C).fill(null));
+    for (const s of best.flat()) spans[s.r][s.c] = s;
+    return spans;
+  }
+
+  // Identical neighboring rows (and columns) become one track that is a multiple of the cell size:
+  // a quiet zone is one track per side, a 1D barcode is one row, bwip-js's 2×2 px modules are one cell.
+  function collapse(grid) {
+    const runs = lines => {
+      const kept = [], sizes = [];
+      for (const line of lines)
+        if (kept.length && line.every((v, i) => v === kept[kept.length - 1][i])) sizes[sizes.length - 1]++;
+        else { kept.push(line); sizes.push(1); }
+      return [kept, sizes];
+    };
+    const [rows, heights] = runs(grid);
+    const [cols, widths] = runs(rows[0].map((_, c) => rows.map(row => row[c])));
+    return { grid: rows.map((_, r) => cols.map(col => col[r])), widths, heights };
   }
 
   function generateBwip(bcid, text, options) {
@@ -1016,63 +1008,65 @@
     return { grid, rows: canvas.height, cols: canvas.width };
   }
 
-  // Rectangle-packs the grid into an email-safe <table>.
-  function buildTableHTML(grid, totalRows, totalCols, cs, fgShort, bgShort) {
-    // Multi-directional rectangle packing (best of 8 D4 orientations)
-    const { spans } = packBestOrientation(grid, totalRows, totalCols);
+  // Builds the <table>. Row 0 and column 0 are emitted cell by cell and carry the track sizes, so
+  // every column has a 1×1 cell with its width and every row one with its height; all other cells
+  // only span and paint. Tracks sized by spanning cells alone come out uneven in WebKit.
+  // f: { open, size: (w, h) => [attrs, css], paint, min, collapse }
+  function buildTable(grid, f) {
+    const t = f.collapse ? collapse(grid) : { grid, widths: grid[0].map(() => 1), heights: grid.map(() => 1) };
+    const totalRows = t.grid.length, totalCols = t.grid[0].length;
+    // min: unquoted attribute values and no </td> or </tr>, which HTML lets a table leave out
+    const q = f.min ? '' : '"', end = f.min ? '' : '</td>';
+    const td = (attrs, css) => `<td${attrs}${css.length ? ` style=${q}${css.join(';')}${q}` : ''}>${end}`;
+    const span = (k, n) => n > 1 ? ` ${k}span=${q}${n}${q}` : '';
+    // Byte length of a cell's markup, which is what the packing minimizes
+    const unit = [td('', []).length, td('', [f.paint]).length], span2 = span('col', 2).length;
+    const spanLen = n => n > 1 ? span2 + (n > 9) + (n > 99) : 0;
+    const spans = packBest(t.grid.slice(1).map(row => row.slice(1)), totalRows - 1, totalCols - 1,
+      (w, h, dark) => unit[+dark] + spanLen(w) + spanLen(h));
 
-    let tableHTML = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border-spacing:0;margin:0 auto;font-size:0;line-height:0;background:${bgShort}">`;
-    let cellCount = 0;
+    let tableHTML = f.open, cellCount = 0;
     for (let r = 0; r < totalRows; r++) {
       tableHTML += '<tr>';
-      // Zero-width sizing cell to lock row height in Safari
-      tableHTML += `<td style="width:0;height:${cs}px;padding:0"></td>`;
       for (let c = 0; c < totalCols; c++) {
-        const s = spans[r][c];
+        const s = r && c ? spans[r - 1][c - 1] : { w: 1, h: 1, dark: t.grid[r][c] };
         if (!s) continue;
         cellCount++;
-        let attrs = '';
-        if (s.w > 1) attrs += ` colspan="${s.w}"`;
-        if (s.h > 1) attrs += ` rowspan="${s.h}"`;
-        let style = `width:${cs * s.w}px;height:${cs * s.h}px;padding:0`;
-        if (s.dark) style += `;background:${fgShort}`;
-        tableHTML += `<td${attrs} style="${style}"></td>`;
+        const [attrs, css] = f.size(r === 0 && t.widths[c], c === 0 && t.heights[r]);
+        tableHTML += td(attrs + span('col', s.w) + span('row', s.h), s.dark ? [...css, f.paint] : css);
       }
-      tableHTML += '</tr>';
+      if (!f.min) tableHTML += '</tr>';
     }
-    tableHTML += '</table>';
-    return { tableHTML, cellCount };
+    return { tableHTML: tableHTML + '</table>', cellCount };
+  }
+
+  // The email-safe <table>.
+  function buildTableHTML(grid, cs, fgShort, bgShort) {
+    return buildTable(grid, {
+      open: `<table role=presentation cellpadding=0 cellspacing=0 border=0 style="border-collapse:collapse;border-spacing:0;margin:0 auto;font-size:0;line-height:0;background:${bgShort}">`,
+      // Heights also as an attribute, because Yahoo and AOL rewrite CSS height to min-height, which
+      // table cells ignore. Both sizes as CSS, because HEY drops the attributes.
+      size: (w, h) => [h ? ` height=${cs * h}` : '', [w && `width:${cs * w}px`, h && `height:${cs * h}px`].filter(Boolean)],
+      paint: `background:${fgShort}`,
+      min: true,
+      collapse: true,
+    });
   }
 
   // Teams ignores every px size and fixes row height at ~21px, so row 0 carries width attributes
-  // to size the column tracks to match. Its dark theme rewrites hex and rgb() colors in styles
-  // (#fff becomes the dark surface color, leaving black on dark gray), so modules are painted
-  // with `currentcolor` and light cells are left unpainted: the code takes the message's text
-  // color on the theme's own table background and stays readable in both themes.
+  // to size the column tracks to match, and no tracks are collapsed. Its dark theme rewrites hex
+  // and rgb() colors in styles (#fff becomes the dark surface color, leaving black on dark gray),
+  // so modules are painted with `currentcolor` and light cells are left unpainted: the code takes
+  // the message's text color on the theme's own table background and stays readable in both themes.
   // Column 0 is emitted cell by cell so no <tr> is left empty by a rowspan from above.
   const TEAMS_CELL = 21;
 
-  function buildTeamsHTML(grid, totalRows, totalCols) {
-    const { spans } = packBestOrientation(grid.slice(1).map(row => row.slice(1)), totalRows - 1, totalCols - 1);
-    const paint = dark => dark ? ' style="background-color:currentcolor"' : '';
-
-    let html = '<table><tr>';
-    for (let c = 0; c < totalCols; c++)
-      html += `<td width="${TEAMS_CELL}"${paint(grid[0][c])}></td>`;
-    html += '</tr>';
-    for (let r = 1; r < totalRows; r++) {
-      html += `<tr><td${paint(grid[r][0])}></td>`;
-      for (let c = 0; c < totalCols - 1; c++) {
-        const s = spans[r - 1][c];
-        if (!s) continue;
-        let attrs = '';
-        if (s.w > 1) attrs += ` colspan="${s.w}"`;
-        if (s.h > 1) attrs += ` rowspan="${s.h}"`;
-        html += `<td${attrs}${paint(s.dark)}></td>`;
-      }
-      html += '</tr>';
-    }
-    return html + '</table>';
+  function buildTeamsHTML(grid) {
+    return buildTable(grid, {
+      open: '<table>',
+      size: w => [w ? ` width="${TEAMS_CELL}"` : '', []],
+      paint: 'background-color:currentcolor',
+    }).tableHTML;
   }
 
   function verifyScan(grid, totalSize) {
@@ -1175,9 +1169,9 @@
       const protect = bcid === 'qrcode' ? buildProtectionMask(moduleRows, pad, totalRows) : buildQuietZoneMask(pad, totalRows, totalCols);
 
       // Apply lossy compression (on a copy of the grid) and build the table
-      function compress(g, m) {
+      function compress(g, m, lossy = cfg.hasLossy && lossyEnabledEl.checked) {
         let modulesFlipped = 0;
-        if (cfg.hasLossy && lossyEnabledEl.checked) {
+        if (lossy) {
           const budget = parseInt(lossyBudgetEl.value) / 100;
           if (bcid === 'qrcode') {
             modulesFlipped = applyQRLossy(g, pad, protect, ecLevel, budget);
@@ -1199,7 +1193,7 @@
             }
           }
         }
-        return { g, m, modulesFlipped, ...buildTableHTML(g, totalRows, totalCols, cs, fgShort, bgShort) };
+        return { g, m, modulesFlipped, ...buildTableHTML(g, cs, fgShort, bgShort) };
       }
 
       // QR: try all 8 data masks and keep the one whose table HTML is shortest
@@ -1207,6 +1201,12 @@
       for (const m of bcid === 'qrcode' ? [0, 1, 2, 3, 4, 5, 6, 7] : [-1]) {
         const cand = compress(m < 0 ? grid.map(row => row.slice()) : remaskQR(grid, pad, protect, m), m);
         if (!best || cand.tableHTML.length < best.tableHTML.length) best = cand;
+      }
+      // Other codes: flipped modules can keep rows and columns from collapsing into one track,
+      // so the lossless table wins when it is no longer
+      if (bcid !== 'qrcode' && best.modulesFlipped > 0) {
+        const lossless = compress(grid.map(row => row.slice()), -1, false);
+        if (lossless.tableHTML.length <= best.tableHTML.length) best = lossless;
       }
       const { tableHTML, cellCount, modulesFlipped } = best;
       grid = best.g;
@@ -1216,7 +1216,7 @@
 
       currentTableHTML = tableHTML;
       currentHTML = wrappedHTML;
-      currentTeamsHTML = buildTeamsHTML(grid, totalRows, totalCols);
+      currentTeamsHTML = buildTeamsHTML(grid);
 
       // Render preview
       previewArea.innerHTML = `<div class="qr-container" style="background:${bgShort}">${tableHTML}</div>`;
@@ -1259,7 +1259,8 @@
   function copyRich() {
     if (!currentTableHTML) return;
     try {
-      const blob = new Blob([currentTableHTML], { type: 'text/html' });
+      // WebKit drops the last empty cell of a pasted table unless content follows it (a comment is not enough)
+      const blob = new Blob([currentTableHTML + '<br>'], { type: 'text/html' });
       const item = new ClipboardItem({ 'text/html': blob, 'text/plain': new Blob([currentTableHTML], { type: 'text/plain' }) });
       navigator.clipboard.write([item]).then(() => showToast('Copied! Paste into Gmail ✓')).catch(() => showToast('Copy failed'));
     } catch (e) {

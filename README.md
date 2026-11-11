@@ -17,26 +17,39 @@ qr2table generates QR codes built entirely from `<td>` cells with inline styles,
 ## Features
 
 - **Pure HTML table output** — works in every email client that supports basic HTML tables
-- **Maximal-area rectangle packing** — merges contiguous same-color regions using `colspan` and `rowspan`, typically reducing cell count by 80%+
-- **HTML minification** — background color inheritance from the `<table>` element, shortened hex colors (`#000000` → `#000`), stripped redundant inline properties
+- **Sizes stated once** — the first row carries the column widths and the first column the row heights, so every other cell is a bare `<td>` with at most a span and a background
+- **Byte-aware rectangle packing** — merges contiguous same-color regions using `colspan` and `rowspan` wherever that makes the HTML shorter
+- **HTML minification** — background color inheritance from the `<table>` element, shortened hex colors (`#000000` → `#000`), unquoted attribute values, no `</td>` or `</tr>`
 - **Mask selection** — QR decoders accept all 8 data masks, so the one that packs into the shortest table is used (lossless)
 - **Lossy compression** *(experimental)* — for QR, sacrifices whole Reed-Solomon codewords up to the error correction capacity of each block and smooths them into larger mergeable regions. Finder patterns, alignment patterns, timing, format and version info are fully protected
-- **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor
+- **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor. The copy ends with a line break, because WebKit drops the last cell of a pasted table when nothing follows it
 - **Teams CLI command** — "Copy Teams command" emits a ready-to-run `teams message send` command carrying a table built for Teams, because Teams strips cell styling from anything pasted into its compose box
 - **Configurable** — foreground/background colors, cell size, error correction level, quiet zone toggle
 
 ## How it works
 
+### Table structure
+
+A naive QR-to-table conversion outputs one `<td>` per module, each with its own width, height and color. qr2table states every size once:
+
+1. Identical neighboring rows and columns are merged into one track that is a multiple of the cell size. A quiet zone becomes one track per side and a 1D barcode a single row.
+2. The first row is emitted cell by cell and carries the column widths; the first column carries the row heights.
+3. Every other cell is a bare `<td>` with at most a `colspan`, a `rowspan` and a background.
+
+Heights are written both as an attribute and as CSS, because Yahoo and AOL rewrite CSS `height` to `min-height` (which table cells ignore) and HEY drops size attributes. Giving every column and row a cell of its own to size it also keeps WebKit from rendering some columns narrower than others.
+
 ### Rectangle packing
 
-A naive QR-to-table conversion outputs one `<td>` per module — for a 33×33 QR code, that's 1,089 cells. qr2table instead applies a greedy maximal-area rectangle packing algorithm:
+The remaining cells are packed greedily:
 
 1. For each uncovered cell, extend **right** as far as possible (same color)
-2. Extend **down** row by row, allowing the width to narrow, tracking the largest area
-3. Emit a single `<td>` with `colspan` and `rowspan` for the best rectangle found
+2. Extend **down** row by row, allowing the width to narrow
+3. Take the rectangle that saves the most bytes over single cells and emit one `<td>` with `colspan` and `rowspan` for it
 4. Mark the rectangle as covered and continue
 
-This exploits the large uniform regions in QR codes (quiet zone, finder patterns, alignment patterns) and typically produces ~200 cells instead of ~1,000.
+Counting bytes instead of area matters because a merge is not always a win: `<td><td>` is shorter than `<td colspan=2>`. The scan runs in all 8 orientations, and each same-color region keeps the orientation that packed it into the fewest bytes.
+
+The markup itself is minified: attribute values are unquoted and `</td>` and `</tr>` are left out, both of which HTML allows. The default `https://example.com` code comes out at about 6 KB.
 
 ### Lossy compression
 
@@ -47,7 +60,7 @@ QR codes include error correction (7%–30% of data, depending on level). qr2tab
 3. Score each codeword by how much **smoothing** it would remove color boundaries, and pick the best ones per block, up to the block's capacity × the slider fraction (100% = all of it)
 4. Smooth the picked codewords (and the unused remainder bits) toward their neighbors' majority color
 
-The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. Each of the 8 data masks is tried with this step applied and the shortest table wins, then the result is re-decoded with jsQR. At 100% the code only scans in clean conditions, so always verify the output with a QR scanner. Other barcode types still flip isolated modules.
+The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td>` elements → smaller HTML. Each of the 8 data masks is tried with this step applied and the shortest table wins, then the result is re-decoded with jsQR. At 100% the code only scans in clean conditions, so always verify the output with a QR scanner. Other barcode types still flip isolated modules, and keep the result only when it makes the table shorter.
 
 ## Usage
 
