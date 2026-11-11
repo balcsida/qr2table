@@ -22,6 +22,7 @@ qr2table generates QR codes built entirely from `<td>` cells with inline styles,
 - **Mask selection** — QR decoders accept all 8 data masks, so the one that packs into the shortest table is used (lossless)
 - **Lossy compression** *(experimental)* — for QR, sacrifices whole Reed-Solomon codewords up to the error correction capacity of each block and smooths them into larger mergeable regions. Finder patterns, alignment patterns, timing, format and version info are fully protected
 - **Rich-text clipboard** — "Copy for email" writes `text/html` to the clipboard so you can paste the rendered QR directly into Gmail, Outlook, or any rich-text editor
+- **Teams CLI command** — "Copy Teams command" emits a ready-to-run `teams message send` command carrying a table built for Teams, because Teams strips cell styling from anything pasted into its compose box
 - **Configurable** — foreground/background colors, cell size, error correction level, quiet zone toggle
 
 ## How it works
@@ -55,7 +56,28 @@ qr2table is a single self-contained HTML file. No build step, no dependencies at
 1. Open `index.html` in a browser (or visit the [live demo](https://balcsida.github.io/qr2table/))
 2. Enter your text or URL
 3. Adjust settings (colors, cell size, EC level, lossy compression)
-4. Click **Copy for email** to paste directly into your email composer, or **Copy HTML** for the raw source
+4. Click **Copy for email** to paste directly into your email composer, **Copy HTML** for the raw source, or **Copy Teams command** to post it into a Teams chat or channel
+
+### Microsoft Teams
+
+Teams will not take a pasted QR. Everything inside the cells (colors, widths, borders) is stripped on paste, leaving a grid of empty `<td>&nbsp;</td>`. Messages sent through the Graph API do keep cell colors, so **Copy Teams command** hands over a command for the [OSO MS Teams CLI](https://msteamscli.com) instead:
+
+```sh
+teams message send --chat "<chat-id>" --content-type html --stdin <<'QR2TABLE'
+<table>…</table>
+QR2TABLE
+```
+
+The table in that command is built differently from the email one, because Teams:
+
+- drops the `background` shorthand and only honors `background-color`
+- rewrites hex and `rgb()` colors in dark theme (`#ffffff` becomes the dark surface color `#292929`, which leaves a painted code black on dark gray), but leaves `currentcolor` alone
+- ignores px sizes and fixes row height at ~21px, so the first row carries `width="21"` attributes to square the modules up
+- gives every row the same fixed height, so the first column is emitted cell by cell as a precaution against a `<tr>` left empty by a `rowspan` from above
+
+So the modules are painted with `background-color:currentcolor` and the light cells are left unpainted. The code takes the message's text color on the theme's own table background and follows the theme: dark on light in light theme, light on dark in dark theme. The color pickers do not apply to it. In dark theme that makes it an inverted code, which not every scanner reads.
+
+In a narrow window Teams squeezes the columns below 21px. The code still decodes in testing, but with less margin than usual, so keep lossy compression low or off for Teams.
 
 ## Prior art
 

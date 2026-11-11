@@ -14,7 +14,7 @@ for (const src of [...libs, page]) vm.runInContext(src, ctx);
 // qrcode-generator's RS_BLOCK_TABLE: [count, totalCount, dataCount(, count2, totalCount2, dataCount2)] × (L,M,Q,H) × 40 versions
 const RS = JSON.parse(libs[0].match(/\[\[1,26,19\](?:,\[[\d,]+\])*\]/)[0]);
 assert.equal(RS.length, 160);
-const { qrcode, jsQR, buildProtectionMask, remaskQR, qrCodewordMap, applyQRLossy, buildTableHTML } = ctx;
+const { qrcode, jsQR, buildProtectionMask, remaskQR, qrCodewordMap, applyQRLossy, buildTableHTML, buildTeamsHTML } = ctx;
 const QR_BLOCKS = vm.runInContext('QR_BLOCKS', ctx); // top-level const: visible to scripts, not a context property
 
 const TOTAL = [26,44,70,100,134,172,196,242,292,346,404,466,532,581,655,733,815,901,991,1085,1156,1258,1364,1474,1588,1706,1828,1921,2051,2185,2323,2465,2611,2761,2876,3034,3196,3362,3532,3706];
@@ -113,4 +113,34 @@ for (const [i, text] of INPUTS.entries()) for (const L of LEVELS) {
   rows.push(`in#${i} ${L} v${(g.length - 2 * PAD - 17) / 4}`.padEnd(12) + `| orig ${String(t.tableHTML.length).padStart(6)}B/${String(t.cellCount).padStart(4)}c ok | mask ${f(cols[0])} | +20% ${f(cols[1])} | +100% ${f(cols[2])}`);
 }
 console.log(rows.join('\n'));
+
+// F. the Teams table (modules in currentcolor, no px sizes) lays back out to the same grid
+const layout = html => {
+  const g = [], occupied = [];
+  let r = 0;
+  for (const [, row] of html.matchAll(/<tr>(.*?)<\/tr>/g)) {
+    g[r] ??= []; occupied[r] ??= [];
+    let c = 0;
+    for (const td of row.matchAll(/<td([^>]*)>/g)) {
+      const w = +(td[1].match(/colspan="(\d+)"/)?.[1] ?? 1), h = +(td[1].match(/rowspan="(\d+)"/)?.[1] ?? 1);
+      const dark = td[1].includes('background-color:currentcolor');
+      while (occupied[r][c]) c++;
+      for (let dr = 0; dr < h; dr++) for (let dc = 0; dc < w; dc++) {
+        (g[r + dr] ??= [])[c + dc] = dark;
+        (occupied[r + dr] ??= [])[c + dc] = 1;
+      }
+      c += w;
+    }
+    r++;
+  }
+  return g;
+};
+for (const text of INPUTS) for (const L of LEVELS) {
+  const g = make(text, L), n = g.length;
+  const teams = buildTeamsHTML(g, n, n), back = layout(teams);
+  // Teams' dark theme rewrites hex and rgb() colors, which is what turned a painted code black on dark gray
+  assert.ok(!/#[0-9a-f]{3}|rgb\(/i.test(teams), `Teams table has no literal colors ${L} ${text.length}`);
+  assert.equal(JSON.stringify(back), JSON.stringify(g), `Teams table round-trips ${L} ${text.length}`);
+  assert.equal(decode(back), text, `Teams table decodes ${L} ${text.length}`);
+}
 console.log('ok');
