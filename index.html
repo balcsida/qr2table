@@ -507,6 +507,7 @@
           <button class="btn-primary" id="copy-rich-btn" onclick="copyRich()">📋 Copy for email</button>
           <button class="btn-secondary" id="copy-btn" onclick="copyHTML()">Copy HTML</button>
           <button class="btn-secondary" id="copy-table-btn" onclick="copyTableOnly()">Copy table only</button>
+          <button class="btn-secondary" id="copy-teams-btn" onclick="copyTeamsCommand()">Copy Teams command</button>
         </div>
       </div>
     </div>
@@ -548,6 +549,7 @@
 
   let currentHTML = '';
   let currentTableHTML = '';
+  let currentTeamsHTML = '';
   let lastVerify = {};
 
   // QR alignment pattern center positions by version
@@ -1042,6 +1044,37 @@
     return { tableHTML, cellCount };
   }
 
+  // Teams ignores every px size and fixes row height at ~21px, so row 0 carries width attributes
+  // to size the column tracks to match. Its dark theme rewrites hex and rgb() colors in styles
+  // (#fff becomes the dark surface color, leaving black on dark gray), so modules are painted
+  // with `currentcolor` and light cells are left unpainted: the code takes the message's text
+  // color on the theme's own table background and stays readable in both themes.
+  // Column 0 is emitted cell by cell so no <tr> is left empty by a rowspan from above.
+  const TEAMS_CELL = 21;
+
+  function buildTeamsHTML(grid, totalRows, totalCols) {
+    const { spans } = packBestOrientation(grid.slice(1).map(row => row.slice(1)), totalRows - 1, totalCols - 1);
+    const paint = dark => dark ? ' style="background-color:currentcolor"' : '';
+
+    let html = '<table><tr>';
+    for (let c = 0; c < totalCols; c++)
+      html += `<td width="${TEAMS_CELL}"${paint(grid[0][c])}></td>`;
+    html += '</tr>';
+    for (let r = 1; r < totalRows; r++) {
+      html += `<tr><td${paint(grid[r][0])}></td>`;
+      for (let c = 0; c < totalCols - 1; c++) {
+        const s = spans[r - 1][c];
+        if (!s) continue;
+        let attrs = '';
+        if (s.w > 1) attrs += ` colspan="${s.w}"`;
+        if (s.h > 1) attrs += ` rowspan="${s.h}"`;
+        html += `<td${attrs}${paint(s.dark)}></td>`;
+      }
+      html += '</tr>';
+    }
+    return html + '</table>';
+  }
+
   function verifyScan(grid, totalSize) {
     const scale = 10;
     const margin = 4; // always a full quiet zone, even when the grid has none
@@ -1183,6 +1216,7 @@
 
       currentTableHTML = tableHTML;
       currentHTML = wrappedHTML;
+      currentTeamsHTML = buildTeamsHTML(grid, totalRows, totalCols);
 
       // Render preview
       previewArea.innerHTML = `<div class="qr-container" style="background:${bgShort}">${tableHTML}</div>`;
@@ -1232,6 +1266,16 @@
       // Fallback: copy as plain HTML
       navigator.clipboard.writeText(currentTableHTML).then(() => showToast('Copied as HTML (rich text not supported in this browser)')).catch(() => showToast('Copy failed'));
     }
+  }
+
+  // Teams strips all cell styling from anything pasted into the compose box, so the only way in
+  // is the Graph API. This hands over a ready command for the Teams CLI (https://msteamscli.com).
+  function copyTeamsCommand() {
+    if (!currentTeamsHTML) return;
+    const cmd = `# ids: teams chat list --output json | for a channel use --team <id> --channel <id>\n`
+      + `teams message send --chat "<chat-id>" --content-type html --stdin <<'QR2TABLE'\n`
+      + `${currentTeamsHTML}\nQR2TABLE\n`;
+    navigator.clipboard.writeText(cmd).then(() => showToast('Teams CLI command copied!')).catch(() => showToast('Copy failed'));
   }
 
   function copyHTML() {
