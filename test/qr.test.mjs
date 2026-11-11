@@ -84,6 +84,24 @@ for (const text of INPUTS) for (const L of LEVELS) {
   }
 }
 
+// Byte mode holds UTF-8, so text beyond ASCII scans as it was typed
+const BEYOND_ASCII = ['árvíztűrő tükörfúrógép', 'Grüße aus Köln', '日本語', 'smile 🙂'];
+for (const text of BEYOND_ASCII) for (const L of LEVELS) assert.equal(decode(make(text, L)), text, `${text} ${L}`);
+// The page's own scan check passes only when the code reads back as the text. verifyScan() draws on a canvas:
+// this one fills rectangles in black or white and hands the pixels to jsQR.
+const createElement = ctx.document.createElement;
+ctx.document.createElement = () => ({ getContext() {
+  const { width } = this, px = new Uint8ClampedArray(width * this.height * 4);
+  return {
+    fillRect(x, y, w, h) { for (let j = y; j < y + h; j++) px.fill(this.fillStyle === '#ffffff' ? 255 : 0, (j * width + x) * 4, (j * width + x + w) * 4); },
+    getImageData: () => ({ data: px }),
+  };
+} });
+const hungarian = make(BEYOND_ASCII[0], 'M');
+assert.equal(ctx.verifyScan(hungarian, hungarian.length, BEYOND_ASCII[0]), true, 'a code that reads as the text is verified');
+assert.equal(ctx.verifyScan(hungarian, hungarian.length, 'árvíztqrQ tükörfúrógép'), false, 'a code that reads as something else is not');
+ctx.document.createElement = createElement;
+
 const pbits = (v, l) => v == 1 ? [3, 2, 1, 1][l] : v == 2 && l == 0 ? 2 : v == 3 && l == 0 ? 1 : 0;
 const copy = g => g.map(r => r.slice());
 

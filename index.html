@@ -552,6 +552,10 @@
   let currentTeamsHTML = '';
   let lastVerify = {};
 
+  // Byte mode holds UTF-8. The library's default keeps only the low byte of each character, which
+  // garbles everything past U+00FF and leaves the rest readable only as ISO 8859-1.
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+
   // QR alignment pattern center positions by version
   const ALIGN_POS = [
     null, [], [6,18], [6,22], [6,26], [6,30], [6,34],
@@ -1137,7 +1141,8 @@
     }).tableHTML;
   }
 
-  function verifyScan(grid, totalSize) {
+  // Whether the grid scans as the text
+  function verifyScan(grid, totalSize, text) {
     const scale = 10;
     const margin = 4; // always a full quiet zone, even when the grid has none
     const w = (totalSize + margin * 2) * scale;
@@ -1153,8 +1158,7 @@
       for (let c = 0; c < totalSize; c++)
         if (grid[r][c]) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
     const imageData = ctx.getImageData(0, 0, w, h);
-    const result = jsQR(imageData.data, w, h);
-    return result ? result.data : null;
+    return jsQR(imageData.data, w, h)?.data === text;
   }
 
   // The smallest mode the text fits: a digit takes 3⅓ bits and one of the 45 alphanumeric characters 5½, against 8 for a byte.
@@ -1302,7 +1306,7 @@
       if (bcid === 'qrcode') {
         // jsQR is the slow step; colours and cell size don't change the grid, so only re-verify when its inputs change
         const key = [text, ecLevel, pad, lossyEnabledEl.checked && lossyBudgetEl.value, best.m].join('\0');
-        if (key !== lastVerify.key) lastVerify = { key, ok: verifyScan(grid, totalRows) !== null };
+        if (key !== lastVerify.key) lastVerify = { key, ok: verifyScan(grid, totalRows, text) };
         statsEl.innerHTML += lastVerify.ok
           ? ` · <span style="color:var(--success)">✓ Scan verified</span>`
           : ` · <span style="color:#f44">⚠ QR may not scan — reduce aggressiveness or increase error correction</span>`;
