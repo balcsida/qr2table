@@ -54,7 +54,7 @@ The result: fewer isolated pixels → larger mergeable rectangles → fewer `<td
 qr2table is a single self-contained HTML file. No build step, no dependencies at runtime (the QR generation library is loaded from a CDN).
 
 1. Open `index.html` in a browser (or visit the [live demo](https://balcsida.github.io/qr2table/))
-2. Enter your text or URL
+2. Enter your text or URL. QR codes carry it as UTF-8, so accents, other scripts and emoji scan as typed
 3. Adjust settings (colors, cell size, EC level, lossy compression)
 4. Click **Copy for email** to paste directly into your email composer, **Copy HTML** for the raw source, or **Copy Teams command** to post it into a Teams chat or channel
 
